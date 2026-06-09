@@ -441,6 +441,19 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
     }
   };
 
+  const handleQuickPush = async () => {
+    if (!gitToken) {
+      handleConnectGitHub();
+      return;
+    }
+    if (!selectedRepoFullName) {
+      setActiveRightPanel('features');
+      alert("Please select a target repository first in the 'Features' panel on the right.");
+      return;
+    }
+    await handlePushCode();
+  };
+
   // Download Standalone App Code
   const handleDownloadApp = () => {
     const blob = new Blob([codeContent], { type: 'text/html' });
@@ -548,6 +561,22 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
             <Settings2 className="w-3.5 h-3.5" /> Credentials
           </button>
 
+          {/* Quick Push to GitHub Button */}
+          <button
+            id="workspace-push-github-bar-btn"
+            onClick={handleQuickPush}
+            disabled={!gitToken || isPushingGithub}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed select-none ${
+              gitToken 
+                ? 'bg-neutral-900 hover:bg-neutral-850 border-neutral-700 text-white dark:bg-zinc-950 dark:hover:bg-zinc-900 border-zinc-800' 
+                : 'bg-neutral-150 dark:bg-zinc-950 border-neutral-200 dark:border-zinc-850 text-neutral-400 dark:text-zinc-650'
+            }`}
+            title={gitToken ? `Push workspace state to ${selectedRepoFullName || 'repository'}` : 'Authenticate/Connect GitHub in Features panel to enable'}
+          >
+            <Github className="w-3.5 h-3.5" />
+            <span>{isPushingGithub ? 'Pushing...' : 'Push to GitHub'}</span>
+          </button>
+
           <button
             onClick={handleRemixBuild}
             title="Create a mirror duplicate copy of current build state"
@@ -629,14 +658,14 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
               </div>
 
               {/* Suggestions chips */}
-              <div className="space-y-1.5 pt-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500">Quick Prompt Enhancements</span>
-                <div className="flex flex-col gap-1.5">
+              <div className="space-y-1.5 pt-2 overflow-hidden">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500 block">Quick Prompt Enhancements</span>
+                <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none snap-x select-none">
                   {suggestions.map((s, idx) => (
                     <button
                       key={idx}
                       onClick={() => triggerCompile(s)}
-                      className="text-left p-2 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-800 hover:border-primary/40 rounded-lg text-[11px] leading-relaxed text-neutral-700 dark:text-zinc-350 hover:bg-neutral-50 dark:hover:bg-zinc-900 transition-all cursor-pointer"
+                      className="snap-start shrink-0 px-3 py-1.5 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-800 hover:border-[#ed3915]/50 rounded-full text-[11px] font-medium leading-none text-neutral-700 dark:text-zinc-300 hover:bg-neutral-50 dark:hover:bg-zinc-900 transition-all cursor-pointer whitespace-nowrap"
                     >
                       {s}
                     </button>
