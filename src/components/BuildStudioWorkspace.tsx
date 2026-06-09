@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Code2, Sparkles, Send, Upload, FileCode, CheckCircle, Database, 
-  Github, Download, Layers, Settings2, ShieldCheck, Cpu, RefreshCw, AlertTriangle, HelpCircle, ArrowLeft, History, ArrowRight
+  Github, Download, Layers, Settings2, ShieldCheck, Cpu, RefreshCw, AlertTriangle, HelpCircle, ArrowLeft, History, ArrowRight,
+  Eye, Columns
 } from 'lucide-react';
 import { Build, UserProfile, AVAILABLE_MODELS, SYSTEM_PROMPT_PRESETS } from '../types';
 import { GitHubService, GitHubRepo } from '../services/githubService';
@@ -32,6 +33,33 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   const [systemInstruction, setSystemInstruction] = useState(SYSTEM_PROMPT_PRESETS[0].instruction);
   const [promptInput, setPromptInput] = useState(initialPrompt || '');
   const [codeContent, setCodeContent] = useState('<!-- Tap Compile to initiate workspace -->');
+
+  // Split View Mode (split-screen / preview full-pane / code full-pane)
+  const [viewMode, setViewMode] = useState<'split' | 'preview' | 'code'>('split');
+  
+  // Custom direct code pasting & file upload override handlers
+  const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
+  const [pastedCodeText, setPastedCodeText] = useState('');
+  const codeUploadRef = useRef<HTMLInputElement>(null);
+
+  const handleCodeUploadChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target && typeof event.target.result === 'string') {
+        const text = event.target.result;
+        setCodeContent(text);
+        setBuildLogs((prev) => [
+          ...prev, 
+          `[${new Date().toLocaleTimeString()}] [INFO] Direct code override loaded from uploaded file: "${file.name}" (${(text.length / 1024).toFixed(1)} KB)`
+        ]);
+        alert(`Successfully injected the contents of "${file.name}" straight into the Editor canvas!`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
   
   // Suggested Prompts
   const suggestions = [
@@ -491,9 +519,25 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
 
   return (
     <div className="flex flex-col h-[calc(100vh-64px)] overflow-hidden bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50 font-sans">
+      <style>{`
+        .custom-sync-scrollbar::-webkit-scrollbar {
+          height: 6px;
+        }
+        .custom-sync-scrollbar::-webkit-scrollbar-track {
+          background: rgba(237, 57, 21, 0.05);
+          border-radius: 9999px;
+        }
+        .custom-sync-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(237, 57, 21, 0.4);
+          border-radius: 9999px;
+        }
+        .custom-sync-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #ed3915;
+        }
+      `}</style>
       
       {/* Build Studio Toolbar */}
-      <div id="buildstudio-action-bar" className="h-14 shrink-0 bg-neutral-50 dark:bg-zinc-900 border-b border-neutral-200 dark:border-zinc-800 px-4 flex items-center justify-between">
+      <div id="buildstudio-action-bar" className="h-14 shrink-0 bg-neutral-50 dark:bg-zinc-900 border-b border-neutral-200 dark:border-zinc-800 px-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <button 
             id="back-home-button"
@@ -506,7 +550,7 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
           
           <div className="flex items-center gap-2">
             <Layers className="w-5 h-5 text-primary" />
-            <div>
+            <div className="hidden md:block">
               <div className="flex items-center gap-2">
                 <h2 className="text-xs font-black uppercase tracking-wider dark:text-neutral-100">BuildStudio Mainframe</h2>
                 <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-trans text-[9px] text-primary font-bold">
@@ -517,6 +561,46 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
               <p className="text-[10px] text-neutral-400 dark:text-zinc-500 font-mono">Workspace ID: {activeBuildId}</p>
             </div>
           </div>
+        </div>
+
+        {/* Centered Segmented View Mode Toggle */}
+        <div className="flex items-center p-0.5 bg-neutral-100 dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 rounded-xl shadow-xs select-none">
+          <button
+            onClick={() => setViewMode('preview')}
+            className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+              viewMode === 'preview' 
+                ? 'bg-[#ed3915] text-white shadow-xs' 
+                : 'text-neutral-500 hover:text-neutral-850 dark:hover:text-zinc-200'
+            }`}
+            title="Preview Mode Only"
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Preview</span>
+          </button>
+          <button
+            onClick={() => setViewMode('split')}
+            className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+              viewMode === 'split' 
+                ? 'bg-neutral-200 dark:bg-zinc-800 text-neutral-900 dark:text-neutral-100 shadow-xs' 
+                : 'text-neutral-500 hover:text-neutral-850 dark:hover:text-zinc-200'
+            }`}
+            title="Split-Screen View"
+          >
+            <Columns className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Split</span>
+          </button>
+          <button
+            onClick={() => setViewMode('code')}
+            className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+              viewMode === 'code' 
+                ? 'bg-[#ed3915] text-white shadow-xs' 
+                : 'text-neutral-500 hover:text-neutral-850 dark:hover:text-zinc-200'
+            }`}
+            title="Code Editor Only"
+          >
+            <Code2 className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Code</span>
+          </button>
         </div>
 
         {/* Action Controls */}
@@ -660,12 +744,12 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
               {/* Suggestions chips */}
               <div className="space-y-1.5 pt-2 overflow-hidden">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500 block">Quick Prompt Enhancements</span>
-                <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none snap-x select-none">
+                <div className="flex gap-2.5 overflow-x-auto pb-3 custom-sync-scrollbar snap-x select-none cursor-grab active:cursor-grabbing">
                   {suggestions.map((s, idx) => (
                     <button
                       key={idx}
                       onClick={() => triggerCompile(s)}
-                      className="snap-start shrink-0 px-3 py-1.5 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-800 hover:border-[#ed3915]/50 rounded-full text-[11px] font-medium leading-none text-neutral-700 dark:text-zinc-300 hover:bg-neutral-50 dark:hover:bg-zinc-900 transition-all cursor-pointer whitespace-nowrap"
+                      className="snap-start shrink-0 px-3.5 py-1.5 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-800 hover:border-[#ed3915]/50 rounded-full text-[11px] font-medium leading-none text-neutral-700 dark:text-zinc-300 hover:bg-neutral-50 dark:hover:bg-zinc-900 transition-all cursor-pointer whitespace-nowrap shadow-2xs"
                     >
                       {s}
                     </button>
@@ -752,7 +836,10 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
             )}
 
             {/* SPLIT VIEW - Top Pane: Live Preview */}
-            <div className="relative border-b border-neutral-200 dark:border-zinc-800" style={{ height: `${splitRatio}%` }}>
+            <div 
+              className={`relative border-b border-neutral-200 dark:border-zinc-800 transition-all duration-200 ${viewMode === 'code' ? 'hidden' : ''}`} 
+              style={{ height: viewMode === 'preview' ? '100%' : `${splitRatio}%` }}
+            >
               <div className="absolute top-2 left-2 z-30 px-2 py-1 bg-white/75 dark:bg-black/70 backdrop-blur-xs rounded border border-neutral-200/50 dark:border-zinc-800 text-[10px] uppercase font-bold tracking-wider text-neutral-500 dark:text-zinc-400">
                 Live Interactive Application Preview
               </div>
@@ -769,14 +856,46 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
             </div>
 
             {/* Split Drag handle emulator */}
-            <div className="h-2 bg-neutral-100 dark:bg-zinc-900 hover:bg-primary/20 cursor-row-resize flex items-center justify-center border-y border-neutral-200 dark:border-zinc-800 shrink-0">
+            <div className={`h-2 bg-neutral-100 dark:bg-zinc-900 hover:bg-primary/20 cursor-row-resize flex items-center justify-center border-y border-neutral-200 dark:border-zinc-800 shrink-0 ${viewMode !== 'split' ? 'hidden' : ''}`}>
               <span className="w-10 h-1 bg-neutral-300 dark:bg-zinc-800 rounded-full"></span>
             </div>
 
             {/* SPLIT VIEW - Bottom Pane: Code Editor */}
-            <div className="flex-1 flex flex-col overflow-hidden relative">
-              <div className="absolute top-2 left-2 z-10 px-2 py-1 bg-neutral-900/90 border border-zinc-800 text-[9px] text-[#ed3915] font-mono tracking-wider uppercase rounded">
-                TypeScript / HTML IDE Canvas
+            <div className={`flex-1 flex flex-col overflow-hidden relative ${viewMode === 'preview' ? 'hidden' : ''}`}>
+              
+              {/* Header bar of IDE Canvas */}
+              <div className="h-10 shrink-0 bg-neutral-50 dark:bg-zinc-950 border-b border-neutral-200 dark:border-zinc-800 px-3 flex items-center justify-between select-none">
+                <span className="text-[10px] text-[#ed3915] font-mono tracking-wider uppercase font-black flex items-center gap-1.5">
+                  <Code2 className="w-3.5 h-3.5" /> TypeScript / HTML IDE Canvas
+                </span>
+                
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setIsPasteModalOpen(true)}
+                    className="px-2.5 py-1 bg-neutral-200 dark:bg-zinc-900 hover:bg-[#ed3915] hover:text-white dark:hover:bg-[#ed3915] border border-transparent dark:border-zinc-800 hover:border-transparent rounded-lg text-[10px] font-bold text-neutral-700 dark:text-zinc-300 transition-all flex items-center gap-1 cursor-pointer shadow-3xs"
+                    title="Paste direct raw code to replace canvas state"
+                  >
+                    <Layers className="w-3 h-3 text-[#ed3915]" />
+                    <span>Paste Code</span>
+                  </button>
+                  
+                  <button
+                    onClick={() => codeUploadRef.current?.click()}
+                    className="px-2.5 py-1 bg-neutral-200 dark:bg-zinc-900 hover:bg-[#ed3915] hover:text-white dark:hover:bg-[#ed3915] border border-transparent dark:border-zinc-800 hover:border-transparent rounded-lg text-[10px] font-bold text-neutral-700 dark:text-zinc-300 transition-all flex items-center gap-1 cursor-pointer shadow-3xs"
+                    title="Upload raw source file directly into editor"
+                  >
+                    <Upload className="w-3 h-3 text-emerald-500" />
+                    <span>Upload File</span>
+                  </button>
+                  
+                  <input
+                    type="file"
+                    ref={codeUploadRef}
+                    onChange={handleCodeUploadChange}
+                    className="hidden"
+                    accept=".html,.js,.ts,.tsx,.css,.txt"
+                  />
+                </div>
               </div>
               
               <div className="h-full w-full flex overflow-hidden">
@@ -1116,6 +1235,79 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
         </div>
 
       </div>
+
+      {/* Direct Code Paste Dialog / Modal overlay */}
+      {isPasteModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-55 animate-fade-in select-none">
+          <div className="w-full max-w-2xl bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col text-left">
+            
+            {/* Header */}
+            <div className="p-4 bg-neutral-50 dark:bg-zinc-950 border-b border-neutral-200 dark:border-zinc-800 flex items-center justify-between">
+              <span className="text-xs font-black uppercase text-neutral-800 dark:text-neutral-100 tracking-wider flex items-center gap-1.5">
+                <Layers className="w-4 h-4 text-[#ed3915]" /> Paste Direct Code Override
+              </span>
+              <button 
+                onClick={() => {
+                  setIsPasteModalOpen(false);
+                  setPastedCodeText('');
+                }}
+                className="text-neutral-400 hover:text-neutral-500 font-mono text-lg font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Form Content */}
+            <div className="p-5 space-y-4">
+              <p className="text-[11px] text-neutral-500 dark:text-zinc-400 leading-relaxed">
+                Paste any HTML, React script, or raw source text below. Clicking <strong className="text-primary text-[#ed3915]">Overwrite Canvas</strong> will instantly inject it straight into your editor workspace.
+              </p>
+
+              <textarea
+                value={pastedCodeText}
+                onChange={(e) => setPastedCodeText(e.target.value)}
+                placeholder="<!-- Paste your code snippet here... -->"
+                rows={10}
+                className="w-full p-3 bg-neutral-50 dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 rounded-xl outline-none focus:border-primary text-xs font-mono dark:text-white resize-none"
+              />
+            </div>
+
+            {/* Footer buttons */}
+            <div className="p-4 bg-neutral-50 dark:bg-zinc-950 border-t border-neutral-200 dark:border-zinc-800 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPasteModalOpen(false);
+                  setPastedCodeText('');
+                }}
+                className="px-4 py-2 text-xs font-bold text-neutral-500 hover:text-neutral-700 bg-neutral-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pastedCodeText.trim()) {
+                    setCodeContent(pastedCodeText);
+                    setBuildLogs((prev) => [
+                      ...prev, 
+                      `[${new Date().toLocaleTimeString()}] [INFO] Raw code input replaced current canvas state (${(pastedCodeText.length / 1024).toFixed(1)} KB)`
+                    ]);
+                    setIsPasteModalOpen(false);
+                    setPastedCodeText('');
+                    alert("Editor canvas updated successfully with your pasted code!");
+                  }
+                }}
+                disabled={!pastedCodeText.trim()}
+                className="px-4 py-2 bg-[#ed3915] hover:bg-[#b32a10] disabled:opacity-40 text-white text-xs font-black uppercase rounded-lg cursor-pointer shadow-xs"
+              >
+                Overwrite Canvas
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );
