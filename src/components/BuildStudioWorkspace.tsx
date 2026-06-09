@@ -4,6 +4,7 @@ import {
   Github, Download, Layers, Settings2, ShieldCheck, Cpu, RefreshCw, AlertTriangle, HelpCircle, ArrowLeft, History, ArrowRight
 } from 'lucide-react';
 import { Build, UserProfile, AVAILABLE_MODELS, SYSTEM_PROMPT_PRESETS } from '../types';
+import { GitHubService, GitHubRepo } from '../services/githubService';
 
 interface BuildStudioWorkspaceProps {
   initialPrompt: string;
@@ -86,6 +87,117 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   const [supabaseLogs, setSupabaseLogs] = useState<string[]>([]);
   const [githubUrl, setGithubUrl] = useState('');
   const [isPushingGithub, setIsPushingGithub] = useState(false);
+
+  // GitHub States
+  const [gitToken, setGitToken] = useState<string>(() => {
+    return localStorage.getItem('github_integration_token') || secrets.GITHUB_PAT || '';
+  });
+  const [gitRepos, setGitRepos] = useState<GitHubRepo[]>([]);
+  const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+  const [selectedRepoFullName, setSelectedRepoFullName] = useState<string>(''); // e.g. 'owner/repo'
+  const [gitFilePath, setGitFilePath] = useState('index.html');
+  const [gitCommitMsg, setGitCommitMsg] = useState('Workspace deployment via BuildStudio');
+  const [gitBranch, setGitBranch] = useState('main');
+  const [gitStatusMsg, setGitStatusMsg] = useState('');
+  const [gitStatusType, setGitStatusType] = useState<'info' | 'success' | 'error' | ''>('');
+  const [showTokenInput, setShowTokenInput] = useState(false);
+  const [manualTokenInput, setManualTokenInput] = useState('');
+
+  // 1. Listen for OAuth state message events from the popup window
+  useEffect(() => {
+    const handleGitHubMessage = (event: MessageEvent) => {
+      const origin = event.origin;
+      if (!origin.endsWith('.run.app') && !origin.includes('localhost') && !origin.includes('127.0.0.1')) {
+        return;
+      }
+
+      if (event.data?.type === 'GITHUB_AUTH_SUCCESS' && event.data?.token) {
+        const token = event.data.token;
+        setGitToken(token);
+        localStorage.setItem('github_integration_token', token);
+        setGitStatusType('success');
+        setGitStatusMsg(event.data.isSandbox 
+          ? 'Connected via Development Sandbox Mode!' 
+          : 'Successfully authenticated with your GitHub Account!'
+        );
+        fetchRepositories(token);
+      } else if (event.data?.type === 'GITHUB_AUTH_ERROR') {
+        setGitStatusType('error');
+        setGitStatusMsg(`Connection Failed: ${event.data.error || 'OAuth Mismatch'}`);
+      }
+    };
+
+    window.addEventListener('message', handleGitHubMessage);
+    return () => window.removeEventListener('message', handleGitHubMessage);
+  }, []);
+
+  // 2. Automatically load repositories list if token details exist or change
+  useEffect(() => {
+    if (gitToken) {
+      fetchRepositories(gitToken);
+    }
+  }, [gitToken]);
+
+  const fetchRepositories = async (tokenOnUse: string) => {
+    if (!tokenOnUse) return;
+    setIsLoadingRepos(true);
+    setGitStatusType('info');
+    setGitStatusMsg('Fetching repositories list from GitHub...');
+    try {
+      if (tokenOnUse === 'ghp_sandboxTokenOAuthBuildStudioZeroFriction') {
+        const mockRepos: GitHubRepo[] = [
+          {
+            id: 101,
+            name: 'interactive-weather-dashboard',
+            full_name: 'sandbox-developer/interactive-weather-dashboard',
+            owner: { login: 'sandbox-developer', avatar_url: 'https://github.com/github.png' },
+            html_url: 'https://github.com/sandbox-developer/interactive-weather-dashboard',
+            description: 'A dynamic visual application compiled directly from natural language prompts.',
+            default_branch: 'main'
+          },
+          {
+            id: 102,
+            name: 'buildstudio-reactive-synth',
+            full_name: 'sandbox-developer/buildstudio-reactive-synth',
+            owner: { login: 'sandbox-developer', avatar_url: 'https://github.com/github.png' },
+            html_url: 'https://github.com/sandbox-developer/buildstudio-reactive-synth',
+            description: 'Zero friction audio synthesizer layouts.',
+            default_branch: 'main'
+          },
+          {
+            id: 103,
+            name: 'tiktok-ai-ide-tunnel',
+            full_name: 'sandbox-developer/tiktok-ai-ide-tunnel',
+            owner: { login: 'sandbox-developer', avatar_url: 'https://github.com/github.png' },
+            html_url: 'https://github.com/sandbox-developer/tiktok-ai-ide-tunnel',
+            description: 'Compilation sandbox system architecture.',
+            default_branch: 'main'
+          }
+        ];
+        
+        await new Promise(resolve => setTimeout(resolve, 800));
+        setGitRepos(mockRepos);
+        setSelectedRepoFullName(mockRepos[0].full_name);
+        setGitStatusType('success');
+        setGitStatusMsg('GitHub Sandbox loaded successfully!');
+        return;
+      }
+
+      const repos = await GitHubService.listRepositories(tokenOnUse);
+      setGitRepos(repos);
+      if (repos.length > 0) {
+        setSelectedRepoFullName(repos[0].full_name);
+      }
+      setGitStatusType('success');
+      setGitStatusMsg(`Loaded ${repos.length} active repositories.`);
+    } catch (err: any) {
+      console.error("Error fetching repos:", err);
+      setGitStatusType('error');
+      setGitStatusMsg(`Connection Error: ${err.message}`);
+    } finally {
+      setIsLoadingRepos(false);
+    }
+  };
 
   // Split View Slider Ratio
   const [splitRatio, setSplitRatio] = useState(50); // percentage for top view (Live Preview)
@@ -221,13 +333,112 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   };
 
   // Push code to GitHub
-  const handleConnectGitHub = () => {
+  const handleConnectGitHub = async () => {
+    setGitStatusType('info');
+    setGitStatusMsg('Initiating GitHub OAuth flow popup...');
+    try {
+      const originParam = encodeURIComponent(window.location.origin);
+      const res = await fetch(`/api/github/auth-url?origin=${originParam}`);
+      if (!res.ok) {
+        throw new Error(`Failed to request OAuth Authorize URL: ${res.status}`);
+      }
+      const data = await res.json();
+      
+      const popupWidth = 600;
+      const popupHeight = 700;
+      const left = window.screenX + (window.outerWidth - popupWidth) / 2;
+      const top = window.screenY + (window.outerHeight - popupHeight) / 2;
+      
+      const authWindow = window.open(
+        data.url,
+        'github_oauth_popup',
+        `width=${popupWidth},height=${popupHeight},left=${left},top=${top},scrollbars=yes,status=yes`
+      );
+
+      if (!authWindow) {
+        setGitStatusType('error');
+        setGitStatusMsg('Popup window blocked. Please permit popups to connect with GitHub.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setGitStatusType('error');
+      setGitStatusMsg(`OAuth Initiation failed: ${err.message}`);
+    }
+  };
+
+  const handleConnectManualToken = () => {
+    if (!manualTokenInput.trim()) return;
+    const token = manualTokenInput.trim();
+    setGitToken(token);
+    localStorage.setItem('github_integration_token', token);
+    setManualTokenInput('');
+    setShowTokenInput(false);
+    setGitStatusType('success');
+    setGitStatusMsg('GitHub PAT configured successfully. Loading repositories...');
+    fetchRepositories(token);
+  };
+
+  const handleDisconnectGitHub = () => {
+    setGitToken('');
+    setGitRepos([]);
+    setSelectedRepoFullName('');
+    setGithubUrl('');
+    localStorage.removeItem('github_integration_token');
+    setGitStatusType('info');
+    setGitStatusMsg('GitHub Integration disconnected.');
+  };
+
+  const handlePushCode = async () => {
+    if (!gitToken) return;
+    if (!selectedRepoFullName) {
+      setGitStatusType('error');
+      setGitStatusMsg('Please select a target repository first.');
+      return;
+    }
+
+    const [owner, repo] = selectedRepoFullName.split('/');
+    if (!owner || !repo) {
+      setGitStatusType('error');
+      setGitStatusMsg('Invalid repository path selection.');
+      return;
+    }
+
     setIsPushingGithub(true);
-    setTimeout(() => {
-      setGithubUrl(`https://github.com/developer/buildstudio-build-${activeBuildId.slice(0, 8)}`);
+    setGitStatusType('info');
+    setGitStatusMsg(`Pushing ${gitFilePath} to ${selectedRepoFullName}...`);
+
+    try {
+      if (gitToken === 'ghp_sandboxTokenOAuthBuildStudioZeroFriction' || gitToken.startsWith('ghp_sandboxToken')) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        const simulatedUrl = `https://github.com/${owner}/${repo}/blob/${gitBranch}/${gitFilePath}`;
+        setGithubUrl(simulatedUrl);
+        setGitStatusType('success');
+        setGitStatusMsg(`Synced Successfully in Sandbox Mode!`);
+        alert(`Zero-friction commit successful!\nPushed file simulated: ${gitFilePath} in sandbox repo: ${selectedRepoFullName}`);
+        return;
+      }
+
+      const pushRes = await GitHubService.pushFileToRepo({
+        token: gitToken,
+        owner,
+        repo,
+        filePath: gitFilePath,
+        content: codeContent,
+        commitMessage: gitCommitMsg,
+        branch: gitBranch
+      });
+
+      setGithubUrl(pushRes.html_url);
+      setGitStatusType('success');
+      setGitStatusMsg(`Active repository synched successfully! Commit SHA: ${pushRes.sha.slice(0, 8)}`);
+      alert(`Synchronisation successful!\nPushed build to GitHub repository: ${selectedRepoFullName}`);
+    } catch (err: any) {
+      console.error(err);
+      setGitStatusType('error');
+      setGitStatusMsg(`Direct Commit Failed: ${err.message}`);
+    } finally {
       setIsPushingGithub(false);
-      alert("Project pushed successfully to GitHub repository: buildstudio-build-" + activeBuildId.slice(0, 8));
-    }, 1500);
+    }
   };
 
   // Download Standalone App Code
@@ -593,23 +804,187 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
               {activeRightPanel === 'features' && (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-200 uppercase tracking-widest">Git Version Sync</h4>
-                    <p className="text-[10px] text-neutral-500 leading-relaxed">Direct code export and automated repository delivery setup</p>
-                    <div className="space-y-2.5">
-                      <button
-                        onClick={handleConnectGitHub}
-                        disabled={isPushingGithub}
-                        className="w-full py-1.5 bg-neutral-900 dark:bg-zinc-950 border border-neutral-700 hover:border-white text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer shadow-sm transition-all"
-                      >
-                        <Github className="w-3.5 h-3.5 text-[#fff]" />
-                        <span>{isPushingGithub ? 'Syncing...' : 'Connect GitHub'}</span>
-                      </button>
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-200 uppercase tracking-widest flex items-center gap-1">
+                        <Github className="w-3.5 h-3.5" /> Git Version Sync
+                      </h4>
+                      {gitToken && (
+                        <span className="flex items-center gap-1 text-[9px] text-green-500 font-mono font-black uppercase">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> Connected
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-neutral-500 leading-relaxed">Export source assets directly to live repository branches</p>
+                    
+                    <div className="space-y-3 pt-1">
+                      
+                      {/* Scenario A: NOT connected to GitHub */}
+                      {!gitToken ? (
+                        <div className="space-y-2.5">
+                          <button
+                            onClick={handleConnectGitHub}
+                            className="w-full py-1.5 bg-neutral-900 border border-neutral-700 hover:border-white text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all hover:bg-neutral-950 select-none"
+                          >
+                            <Github className="w-3.5 h-3.5 text-white" />
+                            <span>Connect via GitHub OAuth</span>
+                          </button>
+
+                          <div className="text-center">
+                            <button
+                              onClick={() => setShowTokenInput(!showTokenInput)}
+                              className="text-[10px] text-neutral-400 hover:text-primary transition-colors underline font-mono cursor-pointer"
+                            >
+                              {showTokenInput ? 'Cancel OAuth Override' : 'Use Personal Access Token / SIM PAT'}
+                            </button>
+                          </div>
+
+                          {showTokenInput && (
+                            <div className="p-3 bg-neutral-100 dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 rounded-lg space-y-2 animate-fade-in">
+                              <label className="block text-[9px] font-bold text-neutral-400 uppercase font-mono">GitHub PAT or Sandbox Key</label>
+                              <input
+                                type="password"
+                                value={manualTokenInput}
+                                onChange={(e) => setManualTokenInput(e.target.value)}
+                                placeholder="ghp_..."
+                                className="w-full p-1.5 text-xs bg-white dark:bg-zinc-900 border border-neutral-300 dark:border-zinc-800 rounded focus:border-[#ed3915] focus:outline-hidden text-neutral-900 dark:text-neutral-100 font-mono"
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={handleConnectManualToken}
+                                  className="flex-1 py-1 bg-[#ed3915] text-white text-xs font-bold rounded-md hover:bg-primary-dark transition-colors"
+                                >
+                                  Save Token
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setGitToken('ghp_sandboxTokenOAuthBuildStudioZeroFriction');
+                                    localStorage.setItem('github_integration_token', 'ghp_sandboxTokenOAuthBuildStudioZeroFriction');
+                                    setGitStatusType('success');
+                                    setGitStatusMsg('Bypassed with secure Sandbox Token!');
+                                  }}
+                                  className="py-1 px-2 border border-neutral-300 dark:border-zinc-800 text-[10px] rounded-md text-neutral-500 hover:text-white dark:hover:bg-zinc-800 hover:bg-zinc-200 transition-colors"
+                                  title="Quick layout mock list"
+                                >
+                                  Simulate
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        // Scenario B: Active GitHub integration session
+                        <div className="space-y-3 p-3 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 rounded-xl space-y-3 text-left">
+                          
+                          {/* Active Repos lists */}
+                          <div className="space-y-1">
+                            <label className="block text-[9px] font-bold text-neutral-400 uppercase font-mono">Target Repository</label>
+                            {isLoadingRepos ? (
+                              <div className="text-[10px] text-zinc-500 font-mono py-1.5 flex items-center gap-1.5">
+                                <RefreshCw className="w-3 h-3 animate-spin text-primary" /> Loading repositories...
+                              </div>
+                            ) : gitRepos.length === 0 ? (
+                              <div className="space-y-1">
+                                <div className="text-[10px] text-amber-500 font-mono">No repositories resolved.</div>
+                                <button 
+                                  onClick={() => fetchRepositories(gitToken)}
+                                  className="text-[9px] text-[#ed3915] hover:underline uppercase flex items-center gap-0.5 select-none"
+                                >
+                                  <RefreshCw className="w-2.5 h-2.5" /> Re-poll Repos
+                                </button>
+                              </div>
+                            ) : (
+                              <select
+                                value={selectedRepoFullName}
+                                onChange={(e) => setSelectedRepoFullName(e.target.value)}
+                                className="w-full p-1.5 text-xs bg-neutral-50 dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded focus:border-[#ed3915] focus:outline-hidden dark:text-neutral-100 text-neutral-800"
+                              >
+                                {gitRepos.map((repo) => (
+                                  <option key={repo.id} value={repo.full_name}>
+                                    {repo.full_name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+
+                          {/* File Path configurations */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1">
+                              <label className="block text-[9px] font-bold text-neutral-400 uppercase font-mono">Target Path</label>
+                              <input
+                                type="text"
+                                value={gitFilePath}
+                                onChange={(e) => setGitFilePath(e.target.value)}
+                                className="w-full p-1.5 text-xs bg-neutral-50 dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded focus:border-[#ed3915] focus:outline-hidden text-neutral-900 dark:text-neutral-100 font-mono"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="block text-[9px] font-bold text-neutral-400 uppercase font-mono">Branch</label>
+                              <input
+                                type="text"
+                                value={gitBranch}
+                                onChange={(e) => setGitBranch(e.target.value)}
+                                className="w-full p-1.5 text-xs bg-neutral-50 dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded focus:border-[#ed3915] focus:outline-hidden text-neutral-900 dark:text-neutral-100 font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Commit Message configurations */}
+                          <div className="space-y-1">
+                            <label className="block text-[9px] font-bold text-neutral-400 uppercase font-mono">Commit Message</label>
+                            <input
+                              type="text"
+                              value={gitCommitMsg}
+                              onChange={(e) => setGitCommitMsg(e.target.value)}
+                              className="w-full p-1.5 text-xs bg-neutral-50 dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded focus:border-[#ed3915] focus:outline-hidden text-neutral-800 dark:text-neutral-100 font-sans"
+                            />
+                          </div>
+
+                          {/* Commit dynamic operations button */}
+                          <button
+                            onClick={handlePushCode}
+                            disabled={isPushingGithub || isLoadingRepos}
+                            className="w-full py-1.5 bg-[#ed3915] hover:bg-primary-dark disabled:opacity-40 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 select-none"
+                          >
+                            <Github className="w-3.5 h-3.5" />
+                            <span>{isPushingGithub ? 'Pushing Commit...' : 'Commit & Push Code'}</span>
+                          </button>
+
+                          {/* Disconnect helper widget link */}
+                          <div className="text-center pt-1">
+                            <button
+                              onClick={handleDisconnectGitHub}
+                              className="text-[9px] text-red-500 hover:text-red-700 uppercase font-bold tracking-wider font-mono cursor-pointer select-none"
+                            >
+                              Disconnect GitHub integration
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Status / Log notification reporting */}
+                      {gitStatusMsg && (
+                        <div className={`p-2 rounded text-[10px] font-mono leading-relaxed border ${
+                          gitStatusType === 'success' 
+                            ? 'bg-green-500/10 text-green-600 border-green-500/20' 
+                            : gitStatusType === 'error'
+                            ? 'bg-red-500/10 text-red-500 border-red-500/20'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-neutral-600 dark:text-zinc-400 border-neutral-250 dark:border-zinc-750'
+                        }`}>
+                          {gitStatusMsg}
+                        </div>
+                      )}
 
                       {githubUrl && (
-                        <div className="p-2.5 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900/50 rounded-lg">
-                          <span className="text-[9px] text-green-700 dark:text-green-400 font-bold block uppercase">Sync Live Repository succeeded</span>
-                          <a href={githubUrl} target="_blank" rel="noreferrer" className="text-[10px] text-primary hover:underline font-mono block truncate mt-1">
-                            {githubUrl}
+                        <div className="p-2.5 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-905/30 rounded-lg">
+                          <span className="text-[10px] text-green-700 dark:text-green-400 font-bold block uppercase">Sync Succeeded</span>
+                          <a 
+                            href={githubUrl} 
+                            target="_blank" 
+                            rel="noreferrer" 
+                            className="text-[10px] text-primary hover:underline font-mono block truncate mt-1 cursor-pointer font-bold"
+                          >
+                            Open pushed code in GitHub →
                           </a>
                         </div>
                       )}

@@ -113,6 +113,138 @@ CRITICAL REQUIREMENTS:
   }
 });
 
+// 3. GitHub OAuth Authorize url endpoint
+app.get("/api/github/auth-url", (req, res) => {
+  const clientId = process.env.GITHUB_CLIENT_ID || "";
+  const clientOrigin = req.query.origin || 'http://localhost:3000';
+  const redirectUri = `${clientOrigin}/api/github/callback`;
+  const scope = "repo user";
+  
+  const params = new URLSearchParams({
+    client_id: clientId || "MOCK_CLIENT_ID",
+    redirect_uri: redirectUri,
+    scope,
+    response_type: "code",
+  });
+  
+  res.json({ 
+    url: `https://github.com/login/oauth/authorize?${params.toString()}`,
+    isConfigured: !!process.env.GITHUB_CLIENT_ID
+  });
+});
+
+// 4. GitHub OAuth Callback
+app.get(["/api/github/callback", "/api/github/callback/"], async (req, res) => {
+  const { code } = req.query;
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+
+  if (!code) {
+    res.send(`
+      <html>
+        <body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'GITHUB_AUTH_ERROR', error: 'No authorization code received' }, '*');
+              window.close();
+            }
+          </script>
+          <p>Error: No authorization code received.</p>
+        </body>
+      </html>
+    `);
+    return;
+  }
+
+  try {
+    if (!clientId || !clientSecret) {
+      // Sandbox fallback token for visual testing if environment secrets are not filled yet
+      const sandboxToken = "ghp_sandboxTokenOAuthBuildStudioZeroFriction";
+      res.send(`
+        <html>
+          <body style="font-family: sans-serif; background: #121212; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh;">
+            <div style="text-align: center; border: 1px solid #eb3915; padding: 20px; border-radius: 12px; max-width: 400px;">
+              <h3 style="color: #ed3915; margin-bottom: 8px;">Development Sandbox Mode</h3>
+              <p style="font-size: 13px; color: #aaa; margin-bottom: 16px;">
+                GITHUB_CLIENT_ID is not configured in .env. Falling back to simulated secure token to allow review of Repository Listing & Code Committing interface.
+              </p>
+              <div style="font-size: 11px; color: #888; margin-bottom: 24px;">Automatically logging in...</div>
+              <script>
+                setTimeout(() => {
+                  if (window.opener) {
+                    window.opener.postMessage({ 
+                      type: 'GITHUB_AUTH_SUCCESS', 
+                      token: '${sandboxToken}', 
+                      isSandbox: true 
+                    }, '*');
+                    window.close();
+                  }
+                }, 1800);
+              </script>
+            </div>
+          </body>
+        </html>
+      `);
+      return;
+    }
+
+    // Exchange auth code for GitHub API Access Token
+    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+      }),
+    });
+
+    const tokenData: any = await tokenRes.json();
+    const token = tokenData.access_token;
+
+    if (!token) {
+      throw new Error(tokenData.error_description || "Could not retrieve access token from GitHub.");
+    }
+
+    res.send(`
+      <html>
+        <body style="font-family: sans-serif; background: #121212; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh;">
+          <div style="text-align: center; border: 1px solid #333; padding: 20px; border-radius: 12px;">
+            <h3 style="color: #00ff66; margin-bottom: 8px;">Authentication Successful</h3>
+            <p style="font-size: 13px; color: #aaa;">Syncing details with BuildStudio workspace. Pop-up closing...</p>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ type: 'GITHUB_AUTH_SUCCESS', token: '${token}' }, '*');
+                window.close();
+              }
+            </script>
+          </div>
+        </body>
+      </html>
+    `);
+  } catch (err: any) {
+    console.error("GitHub OAuth Error:", err);
+    res.send(`
+      <html>
+        <body style="font-family: sans-serif; background: #121212; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh;">
+          <div style="text-align: center; border: 1px solid #ff4444; padding: 20px; border-radius: 12px; max-width: 400px;">
+            <h3 style="color: #ff4444; margin-bottom: 8px;">Authorization Mismatch</h3>
+            <p style="font-size: 13px; color: #aaa;">${err.message}</p>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ type: 'GITHUB_AUTH_ERROR', error: '${err.message}' }, '*');
+              }
+            </script>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+});
+
 // Configure Vite or Static Asset serving
 const startServer = async () => {
   if (process.env.NODE_ENV !== "production") {
