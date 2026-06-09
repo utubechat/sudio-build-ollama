@@ -517,6 +517,50 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   // In-place interactive click mockup: clicking on element toggles inline editing highlight
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Determine Button Text & Icon based on status
+  const getGitStatusParams = () => {
+    if (!gitToken) {
+      return {
+        text: 'Push to GitHub',
+        icon: <Github className="w-3.5 h-3.5 text-neutral-400" />,
+        classes: 'bg-neutral-150 dark:bg-zinc-950 border-neutral-200 dark:border-zinc-850 text-neutral-400 dark:text-zinc-650'
+      };
+    }
+    if (isPushingGithub) {
+      return {
+        text: 'Syncing...',
+        icon: <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#ed3915]" />,
+        classes: 'bg-[#ed3915]/10 border-[#ed3915]/40 text-[#ed3915] animate-pulse'
+      };
+    }
+    if (gitStatusType === 'success' && githubUrl) {
+      return {
+        text: 'Synced',
+        icon: <CheckCircle className="w-3.5 h-3.5 text-green-500 fill-green-500/15" />,
+        classes: 'bg-green-505/10 dark:bg-green-950/20 border-green-500 text-green-600 dark:text-green-400'
+      };
+    }
+    if (gitStatusType === 'error') {
+      return {
+        text: 'Needs Attention',
+        icon: <AlertTriangle className="w-3.5 h-3.5 text-amber-500 fill-amber-500/15" />,
+        classes: 'bg-amber-500/10 dark:bg-amber-950/20 border-amber-500/50 text-amber-600 dark:text-amber-400'
+      };
+    }
+    return {
+      text: 'Push to GitHub',
+      icon: (
+        <div className="relative">
+          <Github className="w-3.5 h-3.5" />
+          <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-green-500 rounded-full border border-neutral-950"></span>
+        </div>
+      ),
+      classes: 'bg-neutral-900 hover:bg-neutral-850 border-neutral-700 text-white dark:bg-zinc-950 dark:hover:bg-zinc-900 border-zinc-800'
+    };
+  };
+
+  const gitParams = getGitStatusParams();
+
   return (
     <div className="flex flex-col h-[calc(100vh-64px)] overflow-hidden bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50 font-sans">
       <style>{`
@@ -655,15 +699,11 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
             id="workspace-push-github-bar-btn"
             onClick={handleQuickPush}
             disabled={!gitToken || isPushingGithub}
-            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed select-none ${
-              gitToken 
-                ? 'bg-neutral-900 hover:bg-neutral-850 border-neutral-700 text-white dark:bg-zinc-950 dark:hover:bg-zinc-900 border-zinc-800' 
-                : 'bg-neutral-150 dark:bg-zinc-950 border-neutral-200 dark:border-zinc-850 text-neutral-400 dark:text-zinc-650'
-            }`}
+            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed select-none ${gitParams.classes}`}
             title={gitToken ? `Push workspace state to ${selectedRepoFullName || 'repository'}` : 'Authenticate/Connect GitHub in Features panel to enable'}
           >
-            <Github className="w-3.5 h-3.5" />
-            <span>{isPushingGithub ? 'Pushing...' : 'Push to GitHub'}</span>
+            {gitParams.icon}
+            <span>{gitParams.text}</span>
           </button>
 
           <button
