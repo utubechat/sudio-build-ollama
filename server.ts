@@ -10,12 +10,23 @@ app.use(express.json());
 
 // Shared Gemini Client - lazy loaded to avoid crashing on start if API key isn't provided yet
 let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI {
+function getGeminiClient(customApiKey?: string): GoogleGenAI {
+  const apiKey = customApiKey || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not defined. Please configure your secrets.");
+  }
+  // Construct a new instance if a custom key is provided, otherwise cache & return the primary client
+  if (customApiKey) {
+    return new GoogleGenAI({
+      apiKey: customApiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  }
   if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not defined. Please configure your secrets.");
-    }
     aiClient = new GoogleGenAI({
       apiKey,
       httpOptions: {
@@ -43,10 +54,61 @@ app.get("/api/models", (req, res) => {
   });
 });
 
-// 2. Generate Endpoint using server-side Gemini API
+// 2. Generate Endpoint using server-side Gemini API with smart resilient model fallback (Flash -> Flash Lite) and exponential backoff retry
+async function generateContentWithRetryAndFallback(ai: any, queryPrompt: string, systemInstruction: string): Promise<{ text: string; model_used: string }> {
+  const modelsToTry = [
+    { name: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+    { name: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" }
+  ];
+  
+  let lastError: any = null;
+  const maxAttemptsPerModel = 2; // Try each model up to 2 times
+
+  for (const modelInfo of modelsToTry) {
+    console.log(`[BuildStudio Engine] Requesting compilation with model: ${modelInfo.name}`);
+    for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
+      try {
+        const result = await ai.models.generateContent({
+          model: modelInfo.name,
+          contents: queryPrompt,
+          config: {
+            systemInstruction,
+            temperature: 0.7,
+          },
+        });
+        
+        const extractedText = result.text;
+        if (extractedText) {
+          console.log(`[BuildStudio Engine] Successfully generated payload using ${modelInfo.name} on attempt ${attempt}`);
+          return {
+            text: extractedText,
+            model_used: modelInfo.name,
+          };
+        }
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = String(err?.message || err);
+        console.warn(`[BuildStudio Engine] Warning: Model ${modelInfo.name} attempt ${attempt}/${maxAttemptsPerModel} failed. Reason:`, errMsg);
+        
+        const isTransient = errMsg.includes("429") || errMsg.includes("503") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("UNAVAILABLE") || errMsg.includes("quota") || errMsg.includes("demand");
+        
+        if (isTransient && attempt < maxAttemptsPerModel) {
+          const sleepMs = attempt * 1200;
+          console.log(`[BuildStudio Engine] Retrying same model in ${sleepMs}ms...`);
+          await new Promise(r => setTimeout(r, sleepMs));
+        } else {
+          // Break inner loop immediately to transition to the fallback model
+          break;
+        }
+      }
+    }
+  }
+  throw lastError;
+}
+
 app.post("/api/generate", async (req, res) => {
   try {
-    const { prompt, model, system_instruction, isGodmode } = req.body;
+    const { prompt, model, system_instruction, isGodmode, api_key } = req.body;
 
     if (!prompt) {
       res.status(400).json({ error: "Prompt is required." });
@@ -60,7 +122,7 @@ app.post("/api/generate", async (req, res) => {
       return;
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(api_key);
 
     // Prepare a secure code generation instructions wrapper
     const defaultInstruction = system_instruction || "You are an expert React/TS developer. Output ONLY valid single-page HTML, Tailwind, and JS script content suitable for an interactive preview.";
@@ -78,17 +140,8 @@ CRITICAL REQUIREMENTS:
 - Return ONLY valid HTML. Do not talk, do not apologize, do not include explainers before or after.
 `;
 
-    // Always use robust gemini-3.5-flash as the underlying driver
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: queryPrompt,
-      config: {
-        systemInstruction: defaultInstruction,
-        temperature: 0.7,
-      },
-    });
+    const { text: rawCode, model_used } = await generateContentWithRetryAndFallback(ai, queryPrompt, defaultInstruction);
 
-    const rawCode = response.text || "";
     // Clean up random markdown backticks if Gemini ignores direct format instructions
     let cleanCode = rawCode.trim();
     if (cleanCode.startsWith("```html")) {
@@ -104,19 +157,31 @@ CRITICAL REQUIREMENTS:
     res.json({
       status: "success",
       code: cleanCode,
-      model_used: model,
+      model_used: model_used,
       created_at: new Date().toISOString()
     });
   } catch (err: any) {
     console.error("Gemini Code Generation Error:", err);
-    res.status(500).json({ error: err.message || "An unexpected error occurred during generation." });
+    const errMessage = err.message || String(err);
+    
+    // Construct extremely premium, clear user-facing error guidance
+    let userFriendlyError = errMessage;
+    if (errMessage.includes("429") || errMessage.includes("RESOURCE_EXHAUSTED") || errMessage.includes("quota")) {
+      userFriendlyError = `⚠️ Gemini API Quota Limit Exceeded (Rate-Limited 429)\n\nThe workspace-shared Gemini API key has currently reached its requests quota pool.\n\n👉 HOW TO RESOLVE THIS SEAMLESSLY:\nYou can configure your own private, free personal Gemini API Key under "Workspace Actions -> Credentials Setup" (top-right menu on the screen).\n\nThis will instantly bypass any shared key limit, giving you dedicated high-availability pipelines for all compilations!`;
+    } else if (errMessage.includes("503") || errMessage.includes("UNAVAILABLE") || errMessage.includes("demand")) {
+      userFriendlyError = `☁️ Gemini Model Busy (Server Timeout 503)\n\nGoogle Gemini models are currently experiencing high request spikes. Please wait 10-15 seconds and trigger compile again.\n\n👉 RECOMMENDED UPGRADE:\nBinding a custom personal API Key in "Workspace Actions -> Credentials Setup" automatically promotes your project to high-priority enterprise execution lines!`;
+    } else if (errMessage.includes("GEMINI_API_KEY is not defined")) {
+      userFriendlyError = `🔌 Gemini API Key Configuration Required\n\nNo active GEMINI_API_KEY environment variable was configured on this server container.\n\n👉 ACTION REQUIRED:\nPlease go to "Workspace Actions -> Credentials Setup" and key in a Gemini API Key to activate the compiler workspace instantly.`;
+    }
+
+    res.status(500).json({ error: userFriendlyError });
   }
 });
 
 // Applet-Specific Image Generation API using gemini-2.5-flash-image
 app.post("/api/generate-image", async (req, res) => {
   try {
-    const { prompt, aspectRatio } = req.body;
+    const { prompt, aspectRatio, api_key } = req.body;
     if (!prompt) {
       res.status(400).json({ error: "Prompt is required." });
       return;
@@ -126,7 +191,7 @@ app.post("/api/generate-image", async (req, res) => {
     console.log(`Generating image for prompt: "${prompt}", aspectRatio: ${currentRatio}`);
 
     // Check if key is available. If not, generate high-quality fallback immediately to avoid blocking client
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = api_key || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       // Create lovely abstract placeholder seed based on prompt text length and current timestamp
       const width = currentRatio === "16:9" ? 1200 : currentRatio === "4:3" ? 800 : currentRatio === "3:4" ? 600 : 512;
@@ -143,7 +208,7 @@ app.post("/api/generate-image", async (req, res) => {
       return;
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(api_key);
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {

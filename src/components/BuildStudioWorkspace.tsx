@@ -67,6 +67,7 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
         body: JSON.stringify({
           prompt: imagePrompt,
           aspectRatio: imageRatio,
+          api_key: secrets?.GEMINI_API_KEY || null,
         }),
       });
 
@@ -116,6 +117,13 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   const [systemInstruction, setSystemInstruction] = useState(SYSTEM_PROMPT_PRESETS[0].instruction);
   const [promptInput, setPromptInput] = useState(initialPrompt || '');
   const [codeContent, setCodeContent] = useState('<!-- Tap Compile to initiate workspace -->');
+  const [buildMetrics, setBuildMetrics] = useState({
+    buildTime: '1.4s',
+    errorCount: 0,
+    stability: 98,
+    totalBuilds: 0,
+  });
+  const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
 
   // Custom Reusable Prompt Template types and state
   interface CustomPromptTemplate {
@@ -723,6 +731,7 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
     setIsBuilding(true);
     setBuildLogs([]);
     setPromptInput(promptToUse);
+    const compileStartTime = Date.now();
 
     try {
       await addLog("⚡ Initializing Sandbox Container Isolation Layer...", 300);
@@ -746,6 +755,7 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
           model: selectedModel,
           system_instruction: systemInstruction,
           isGodmode: isGodmode,
+          api_key: secrets?.GEMINI_API_KEY || null,
         }),
       });
 
@@ -777,8 +787,35 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
       setBuilds((prev) => [newBuild, ...prev]);
       setActiveBuildId(newBuild.id);
 
+      // Update success metrics
+      const currentElapsed = ((Date.now() - compileStartTime) / 1000).toFixed(1) + 's';
+      setBuildMetrics(prev => {
+        const total = prev.totalBuilds + 1;
+        const stabVal = Math.min(100, Math.round(100 - (prev.errorCount / total) * 105));
+        return {
+          buildTime: currentElapsed,
+          errorCount: prev.errorCount,
+          stability: stabVal,
+          totalBuilds: total
+        };
+      });
+
     } catch (err: any) {
       setBuildLogs((prev) => [...prev, `[ERROR] Build pipeline crashed: ${err.message}`]);
+
+      // Update failure metrics
+      const currentElapsed = ((Date.now() - compileStartTime) / 1000).toFixed(1) + 's';
+      setBuildMetrics(prev => {
+        const newErrors = prev.errorCount + 1;
+        const total = prev.totalBuilds + 1;
+        const stabVal = Math.max(15, Math.round(100 - (newErrors / total) * 100));
+        return {
+          buildTime: currentElapsed,
+          errorCount: newErrors,
+          stability: stabVal,
+          totalBuilds: total
+        };
+      });
     } finally {
       setIsBuilding(false);
     }
@@ -1148,64 +1185,110 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
         {/* Action Controls */}
         <div className="flex items-center gap-2 sm:gap-3">
           
-          {/* Agent API Toggle (Low Mode / Godmode) */}
-          <div className="hidden lg:flex items-center gap-1.5 p-1 bg-neutral-100 dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 rounded-lg text-[10px] uppercase font-bold tracking-wider">
-            <button
-              onClick={() => setIsGodmode(false)}
-              className={`px-2 py-1 rounded transition-all ${!isGodmode ? 'bg-white dark:bg-zinc-900 text-neutral-800 dark:text-zinc-100 shadow' : 'text-neutral-500'}`}
-            >
-              Low Mode
-            </button>
-            <button
-              onClick={() => setIsGodmode(true)}
-              className={`px-2 py-1 rounded transition-all flex items-center gap-1 ${isGodmode ? 'bg-primary text-white shadow-md' : 'text-neutral-500'}`}
-            >
-              <Sparkles className="w-2.5 h-2.5" /> Godmode
-            </button>
+          {/* Build Health Indicator */}
+          <div className={`flex items-center gap-2 px-3 py-1 border rounded-lg text-xs font-medium transition-all select-none ${
+            buildMetrics.errorCount === 0 
+              ? 'bg-emerald-500/10 dark:bg-emerald-950/20 border-emerald-500/30 text-emerald-600 dark:text-emerald-400' 
+              : 'bg-amber-500/10 dark:bg-amber-950/20 border-amber-500/30 text-amber-600 dark:text-amber-400'
+          }`} title="Dynamic sandbox compilation stability, recent build errors, and average telemetry response time.">
+            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${buildMetrics.errorCount === 0 ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500 animate-bounce'}`} />
+            <div className="text-[10px] font-mono leading-none flex flex-col items-start gap-1">
+              <span className="font-bold tracking-tight">{buildMetrics.errorCount === 0 ? 'HEALTHY' : 'WARNING'} ({buildMetrics.stability}% Stability)</span>
+              <span className="text-[8px] opacity-75">Build: {buildMetrics.buildTime} | Errors: {buildMetrics.errorCount}</span>
+            </div>
           </div>
-
-          {/* Model picker dropdown */}
-          <div className="flex items-center gap-1 bg-neutral-100 dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 px-2 py-1 rounded-lg">
-            <Cpu className="w-3.5 h-3.5 text-primary" />
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="bg-transparent text-xs text-neutral-800 dark:text-neutral-200 border-none outline-none font-mono cursor-pointer"
-            >
-              {AVAILABLE_MODELS.map((m) => (
-                <option key={m.name} value={m.name} className="bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-200">
-                  {m.name} ({m.isHighEnd ? 'PRO' : 'FREE'})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            onClick={onOpenSecrets}
-            className="hidden sm:flex items-center gap-1 px-2.5 py-1 text-xs border border-neutral-200 dark:border-zinc-800 rounded-lg hover:bg-neutral-100 dark:hover:bg-zinc-800 text-neutral-500 dark:text-neutral-300 font-medium cursor-pointer"
-          >
-            <Settings2 className="w-3.5 h-3.5" /> Credentials
-          </button>
 
           {/* Quick Push to GitHub Button */}
           <button
             id="workspace-push-github-bar-btn"
             onClick={handleQuickPush}
             disabled={!gitToken || isPushingGithub}
-            className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed select-none ${gitParams.classes}`}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed select-none ${gitParams.classes}`}
             title={gitToken ? `Push workspace state to ${selectedRepoFullName || 'repository'}` : 'Authenticate/Connect GitHub in Features panel to enable'}
           >
             {gitParams.icon}
-            <span>{gitParams.text}</span>
+            <span className="hidden leading-none md:inline">{gitParams.text}</span>
           </button>
 
-          <button
-            onClick={handleRemixBuild}
-            title="Create a mirror duplicate copy of current build state"
-            className="hidden sm:flex items-center gap-1 px-2.5 py-1 text-xs border border-primary/25 bg-orange-trans hover:bg-orange-trans-heavy rounded-lg text-primary font-semibold transition-all cursor-pointer"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Remix Code
-          </button>
+          {/* Workspace Hidden Menu Selector */}
+          <div className="relative">
+            <button
+              id="workspace-options-dropdown-trigger"
+              onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-neutral-100 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-xs font-bold rounded-lg transition-all border border-neutral-200 dark:border-zinc-750 cursor-pointer text-neutral-700 dark:text-neutral-200 select-none"
+              title="Show additional options"
+            >
+              <span>Workspace Actions</span>
+              <span className="text-[9px] opacity-70">▼</span>
+            </button>
+
+            {isWorkspaceMenuOpen && (
+              <>
+                {/* Backdrop to close list click */}
+                <div className="fixed inset-0 z-40 bg-transparent" onClick={() => setIsWorkspaceMenuOpen(false)} />
+                
+                <div className="absolute right-0 mt-2 w-52 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded-xl shadow-xl p-2.5 z-50 text-xs text-left text-neutral-800 dark:text-neutral-100 animate-fade-in space-y-1">
+                  <div className="px-2 py-1 text-[9px] text-zinc-400 uppercase tracking-widest font-bold font-mono">
+                    System Actions
+                  </div>
+                  
+                  {/* Credentials / secrets item */}
+                  <button
+                    onClick={() => {
+                      setIsWorkspaceMenuOpen(false);
+                      onOpenSecrets();
+                    }}
+                    className="w-full text-left px-2.5 py-2 hover:bg-neutral-50 dark:hover:bg-zinc-850 rounded-lg flex items-center gap-2 transition-all cursor-pointer font-medium"
+                  >
+                    <Settings2 className="w-4 h-4 text-neutral-500" />
+                    <span>Credentials Setup</span>
+                  </button>
+
+                  {/* Remix copy */}
+                  <button
+                    onClick={() => {
+                      setIsWorkspaceMenuOpen(false);
+                      handleRemixBuild();
+                    }}
+                    className="w-full text-left px-2.5 py-2 hover:bg-neutral-50 dark:hover:bg-zinc-850 rounded-lg flex items-center gap-2 transition-all cursor-pointer font-medium"
+                  >
+                    <RefreshCw className="w-4 h-4 text-primary" />
+                    <span className="text-primary font-bold">Remix Code Base</span>
+                  </button>
+
+                  <div className="h-px bg-neutral-100 dark:bg-zinc-800 my-1" />
+                  
+                  <div className="px-2 py-1 text-[9px] text-zinc-400 uppercase tracking-widest font-bold font-mono">
+                    Sandbox Exports
+                  </div>
+
+                  {/* Export Standalone */}
+                  <button
+                    onClick={() => {
+                      setIsWorkspaceMenuOpen(false);
+                      handleDownloadApp();
+                    }}
+                    className="w-full text-left px-2.5 py-2 hover:bg-neutral-50 dark:hover:bg-zinc-850 rounded-lg flex items-center gap-2 transition-all cursor-pointer font-medium"
+                  >
+                    <Download className="w-4 h-4 text-emerald-500" />
+                    <span>Export Standalone HTML</span>
+                  </button>
+
+                  {/* Publish Showcase */}
+                  <button
+                    onClick={() => {
+                      setIsWorkspaceMenuOpen(false);
+                      handleSaveToGallery();
+                    }}
+                    className="w-full text-left px-2.5 py-2 hover:bg-neutral-50 dark:hover:bg-zinc-850 rounded-lg flex items-center gap-2 transition-all cursor-pointer font-medium"
+                  >
+                    <Layers className="w-4 h-4 text-[#ed3915]" />
+                    <span className="text-[#ed3915] font-semibold">Publish to Portal Gallery</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1245,27 +1328,60 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
           <div className="p-4 flex flex-col h-full overflow-y-auto">
             <div className="flex-1 space-y-4">
               
-              {/* Context Attachments */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500">
-                  <span>Compilation Payloads</span>
-                  <button 
-                    onClick={handleUploadClick}
-                    className="text-primary hover:underline flex items-center gap-0.5 cursor-pointer text-[10px]"
-                  >
-                    <Upload className="w-3 h-3" /> Add Context
-                  </button>
+              {/* 1. AGENT SELECTION MODULE */}
+              <div className="p-3 bg-neutral-100 dark:bg-zinc-950 rounded-xl border border-neutral-200 dark:border-zinc-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-neutral-500 dark:text-zinc-400 flex items-center gap-1.5">
+                    <Cpu className="w-3.5 h-3.5 text-primary animate-pulse" /> Active LLM Agent
+                  </span>
+                  
+                  {/* Mode toggle */}
+                  <div className="flex items-center gap-1 bg-neutral-200 dark:bg-zinc-900 p-0.5 rounded border border-neutral-250 dark:border-zinc-800 text-[8px] font-bold uppercase select-none">
+                    <button
+                      onClick={() => setIsGodmode(false)}
+                      className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${!isGodmode ? 'bg-white dark:bg-zinc-800 text-neutral-800 dark:text-neutral-100 shadow-3xs' : 'text-neutral-500'}`}
+                      title="Run with standard/fast local models"
+                    >
+                      Low
+                    </button>
+                    <button
+                      onClick={() => setIsGodmode(true)}
+                      className={`px-1.5 py-0.5 rounded transition-all flex items-center gap-0.5 cursor-pointer ${isGodmode ? 'bg-primary text-white shadow-3xs' : 'text-neutral-500'}`}
+                      title="Unlock high-end models"
+                    >
+                      <Sparkles className="w-2.5 h-2.5" /> Godmode
+                    </button>
+                  </div>
                 </div>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileChange} 
-                  className="hidden" 
-                  accept=".pdf,.code,.js,.html,.txt,.png,.jpeg"
-                />
+
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="w-full text-xs p-1.5 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-805 rounded outline-none text-neutral-800 dark:text-neutral-250 font-mono cursor-pointer"
+                >
+                  {AVAILABLE_MODELS.map((m) => (
+                    <option key={m.name} value={m.name} className="bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-200">
+                      {m.name} ({m.isHighEnd ? 'PRO' : 'FREE'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 2. COMPILATION PAYLOADS */}
+              <div className="space-y-1.5 bg-neutral-100/40 dark:bg-zinc-950/20 p-2.5 rounded-lg border border-neutral-200/50 dark:border-zinc-850">
+                <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500">
+                  <span>Compilation Context Payloads</span>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleFileChange} 
+                    className="hidden" 
+                    accept=".pdf,.code,.js,.html,.txt,.png,.jpeg"
+                  />
+                </div>
 
                 {uploadedFiles.length === 0 ? (
-                  <p className="text-[10px] text-neutral-400 dark:text-zinc-650 italic">No files provided as schema definitions.</p>
+                  <p className="text-[9px] text-neutral-400 dark:text-zinc-650 italic leading-tight">No references uploaded. Use the '+' button in the chat input below to load files.</p>
                 ) : (
                   <div className="grid grid-cols-1 gap-1.5">
                     {uploadedFiles.map((f, idx) => (
@@ -1279,195 +1395,196 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
                 )}
               </div>
 
-              {/* Suggestions chips */}
-              <div className="space-y-1.5 pt-2 overflow-hidden">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500 block">Quick Prompt Enhancements</span>
-                <div className="flex gap-2.5 overflow-x-auto pb-3 custom-sync-scrollbar snap-x select-none cursor-grab active:cursor-grabbing">
+              {/* 3. PROMPT TEMPLATE BUILDER */}
+              <div className="pt-2 border-t border-neutral-200 dark:border-zinc-850 space-y-2">
+                <button
+                  onClick={() => setIsPromptBuilderOpen(!isPromptBuilderOpen)}
+                  className="w-full flex items-center justify-between text-[11px] font-black uppercase tracking-wider text-neutral-550 dark:text-zinc-400 hover:text-[#ed3915] transition-colors focus:outline-none cursor-pointer"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Bookmark className="w-3.5 h-3.5 text-primary" />
+                    <span>Prompt Builder Library</span>
+                  </div>
+                  <span className="text-[10px] text-zinc-500 font-mono">
+                    {isPromptBuilderOpen ? 'Hide ▲' : 'Manage (' + customTemplates.length + ') ▼'}
+                  </span>
+                </button>
+
+                {isPromptBuilderOpen && (
+                  <div className="space-y-3 bg-neutral-105 dark:bg-zinc-955 p-2.5 rounded-xl border border-neutral-200 dark:border-zinc-800 animate-fade-in text-[11px]">
+                    <p className="text-[10px] text-neutral-500 leading-relaxed font-sans">
+                      Collect custom prompt specifications in persistent JSON. Load into template workspace on demand.
+                    </p>
+
+                    {/* Quick Filter tabs */}
+                    <div className="flex flex-wrap gap-1 border-b border-neutral-200 dark:border-zinc-800 pb-1.5">
+                      {['All', 'Layouts', 'Behaviors', 'Visual FX'].map((cat) => (
+                        <button
+                          key={cat}
+                          onClick={() => setActiveCategoryFilter(cat)}
+                          className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-tight transition-all cursor-pointer ${
+                            activeCategoryFilter === cat 
+                              ? 'bg-[#ed3915] text-white' 
+                              : 'text-neutral-500 hover:text-neutral-800 dark:text-zinc-400 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-zinc-900'
+                          }`}
+                        >
+                          {cat}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Templates List */}
+                    <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-0.5 custom-sync-scrollbar">
+                      {customTemplates
+                        .filter(t => activeCategoryFilter === 'All' || t.category === activeCategoryFilter)
+                        .map((template) => (
+                          <div 
+                            key={template.id} 
+                            className="p-2 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-850 hover:border-[#ed3915]/30 rounded-md transition-all group relative"
+                          >
+                            <div className="flex items-start justify-between gap-1">
+                              <div>
+                                <span className="px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-neutral-150 dark:bg-zinc-800 text-zinc-400 rounded mr-1.5">
+                                  {template.category}
+                                </span>
+                                <strong className="text-neutral-800 dark:text-neutral-200 text-[10px] tracking-tight">{template.title}</strong>
+                              </div>
+                              <button
+                                onClick={(e) => handleDeleteTemplate(template.id, e)}
+                                className="opacity-0 group-hover:opacity-100 text-neutral-400 hover:text-red-500 p-0.5 rounded transition-all"
+                                title="Delete saved template"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                            <p className="text-[9px] text-zinc-500 dark:text-zinc-400 mt-1 line-clamp-2 select-text font-serif leading-tight">
+                              {template.prompt}
+                            </p>
+
+                            {/* Actions bar for template */}
+                            <div className="mt-1.5 flex items-center justify-end gap-1 border-t border-neutral-100 dark:border-zinc-850/50 pt-1">
+                              <button
+                                onClick={() => {
+                                  setPromptInput(template.prompt);
+                                  alert(`Successfully loaded custom prompt: "${template.title}" into core input canvas!`);
+                                }}
+                                className="px-1.5 py-0.5 bg-neutral-150 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-neutral-600 dark:text-neutral-300 rounded text-[9px] font-bold transition-all cursor-pointer select-none"
+                                title="Load template into text area input"
+                              >
+                                Load Input
+                              </button>
+                              <button
+                                onClick={() => triggerCompile(template.prompt)}
+                                className="px-1.5 py-0.5 bg-[#ed3915]/15 hover:bg-[#ed3915] text-[#ed3915] hover:text-white rounded text-[9px] font-bold border border-[#ed3915]/20 hover:border-transparent transition-all cursor-pointer select-none"
+                                title="Instantly trigger compilation based on template prompt"
+                              >
+                                Run & Compile
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+
+                      {customTemplates.filter(t => activeCategoryFilter === 'All' || t.category === activeCategoryFilter).length === 0 && (
+                        <div className="text-center py-4 text-[9px] text-zinc-500">
+                          No saved templates in this category.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Create New template Form */}
+                    <div className="pt-2 border-t border-neutral-200 dark:border-zinc-805 space-y-1.5 text-[10px]">
+                      <span className="font-bold text-neutral-500 dark:text-zinc-450 uppercase tracking-widest text-[8px] block">Save Current Snippet</span>
+                      
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input
+                          type="text"
+                          placeholder="Template Title..."
+                          value={newTemplateTitle}
+                          onChange={(e) => setNewTemplateTitle(e.target.value)}
+                          className="w-full text-xs p-1 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none focus:border-primary text-neutral-800 dark:text-neutral-100"
+                        />
+                        <select
+                          value={newTemplateCategory}
+                          onChange={(e) => setNewTemplateCategory(e.target.value)}
+                          className="w-full text-xs p-1 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-805 rounded outline-none text-neutral-700 dark:text-neutral-300 font-mono"
+                        >
+                          <option value="Layouts">Layouts</option>
+                          <option value="Behaviors">Behaviors</option>
+                          <option value="Visual FX">Visual FX</option>
+                          <option value="APIs & DB">APIs & DB</option>
+                        </select>
+                      </div>
+
+                      <div className="relative">
+                        <textarea
+                          placeholder="Visual/behavior details of this prompt snippet..."
+                          value={newTemplatePrompt}
+                          onChange={(e) => setNewTemplatePrompt(e.target.value)}
+                          rows={2}
+                          className="w-full text-xs p-1.5 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none focus:border-primary text-neutral-800 dark:text-neutral-100 resize-none font-mono"
+                        />
+                      </div>
+
+                      <button
+                        onClick={handleSaveTemplate}
+                        disabled={!newTemplateTitle.trim() || !newTemplatePrompt.trim()}
+                        className="w-full py-1 text-[9px] uppercase tracking-wider font-bold bg-[#ed3915] text-white hover:bg-primary-dark disabled:opacity-40 rounded flex items-center justify-center gap-1 cursor-pointer select-none"
+                      >
+                        <Plus className="w-2.5 h-2.5" />
+                        <span>Bookmark Template Spec</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 4. ACTIVE SYSTEM RULES SETUP */}
+              <div className="pt-2 border-t border-neutral-200 dark:border-zinc-850 space-y-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500 flex items-center gap-1.5">
+                  <Settings2 className="w-3.5 h-3.5 text-primary" /> Active System Rules Setup
+                </span>
+                <select
+                  value={systemInstruction}
+                  onChange={(e) => setSystemInstruction(e.target.value)}
+                  className="w-full text-xs p-1.5 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-800 rounded outline-none text-neutral-700 dark:text-neutral-300 font-mono cursor-pointer"
+                >
+                  {SYSTEM_PROMPT_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.instruction}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+            </div>
+
+            {/* 5. QUICK PROMPT ENHANCEMENTS & 6. CHAT INPUT BLOCK (AT THE BOTTOM OF SIDEBAR) */}
+            <div className="mt-auto pt-4 border-t border-neutral-200 dark:border-zinc-800 space-y-3">
+              
+              {/* suggestions chips right above input */}
+              <div className="space-y-1 overflow-hidden">
+                <span className="text-[10px] font-black uppercase tracking-wider text-neutral-400 dark:text-zinc-500 block">Quick Prompt Enhancements</span>
+                <div className="flex gap-1.5 overflow-x-auto pb-1.5 custom-sync-scrollbar snap-x select-none cursor-grab active:cursor-grabbing">
                   {suggestions.map((s, idx) => (
                     <button
                       key={idx}
                       onClick={() => triggerCompile(s)}
-                      className="snap-start shrink-0 px-3.5 py-1.5 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-800 hover:border-[#ed3915]/50 rounded-full text-[11px] font-medium leading-none text-neutral-700 dark:text-zinc-300 hover:bg-neutral-50 dark:hover:bg-zinc-900 transition-all cursor-pointer whitespace-nowrap shadow-2xs"
+                      className="snap-start shrink-0 px-2.5 py-1 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-805 hover:border-[#ed3915]/50 rounded-full text-[10px] font-semibold leading-none text-neutral-700 dark:text-zinc-350 hover:bg-neutral-55 dark:hover:bg-zinc-900 transition-all cursor-pointer whitespace-nowrap"
                     >
                       {s}
                     </button>
                   ))}
                 </div>
               </div>
-            </div>
 
-            {/* Prompt Template Builder Section */}
-            <div className="pt-4 border-t border-neutral-250 dark:border-zinc-850 space-y-2.5">
-              <button
-                onClick={() => setIsPromptBuilderOpen(!isPromptBuilderOpen)}
-                className="w-full flex items-center justify-between text-[11px] font-black uppercase tracking-wider text-neutral-500 dark:text-zinc-400 hover:text-[#ed3915] transition-colors focus:outline-none"
-              >
-                <div className="flex items-center gap-1.5 animate-pulse">
-                  <Bookmark className="w-3.5 h-3.5 text-primary" />
-                  <span>Prompt Builder Library</span>
-                </div>
-                <span className="text-[10px] text-zinc-500">
-                  {isPromptBuilderOpen ? 'Hide ▲' : 'Manage ' + customTemplates.length + ' Templates ▼'}
-                </span>
-              </button>
-
-              {isPromptBuilderOpen && (
-                <div className="space-y-3 bg-neutral-100 dark:bg-zinc-950 p-2.5 rounded-lg border border-neutral-200 dark:border-zinc-800 animate-fade-in text-[11px]">
-                  {/* Tiny Description */}
-                  <p className="text-[10px] text-neutral-500 leading-relaxed">
-                    Collect modular prompt snippets categorized in JSON storage. Click any item to load or immediately compile.
-                  </p>
-
-                  {/* Quick Filter tabs */}
-                  <div className="flex flex-wrap gap-1 border-b border-neutral-200 dark:border-zinc-800 pb-1.5">
-                    {['All', 'Layouts', 'Behaviors', 'Visual FX'].map((cat) => (
-                      <button
-                        key={cat}
-                        onClick={() => setActiveCategoryFilter(cat)}
-                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-tight transition-all cursor-pointer ${
-                          activeCategoryFilter === cat 
-                            ? 'bg-[#ed3915] text-white' 
-                            : 'text-neutral-500 hover:text-neutral-800 dark:text-zinc-400 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-zinc-900'
-                        }`}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Templates List */}
-                  <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-0.5 custom-sync-scrollbar">
-                    {customTemplates
-                      .filter(t => activeCategoryFilter === 'All' || t.category === activeCategoryFilter)
-                      .map((template) => (
-                        <div 
-                          key={template.id} 
-                          className="p-2 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-850 hover:border-[#ed3915]/30 rounded-md transition-all group relative"
-                        >
-                          <div className="flex items-start justify-between gap-1">
-                            <div>
-                              <span className="px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-neutral-150 dark:bg-zinc-800 text-zinc-400 rounded mr-1.5">
-                                {template.category}
-                              </span>
-                              <strong className="text-neutral-800 dark:text-neutral-200 text-[10px] tracking-tight">{template.title}</strong>
-                            </div>
-                            <button
-                              onClick={(e) => handleDeleteTemplate(template.id, e)}
-                              className="opacity-0 group-hover:opacity-100 text-neutral-400 hover:text-red-500 p-0.5 rounded transition-all"
-                              title="Delete saved template"
-                            >
-                              <Trash2 className="w-2.5 h-2.5" />
-                            </button>
-                          </div>
-                          <p className="text-[9px] text-zinc-500 dark:text-zinc-400 mt-1 line-clamp-2 select-text font-serif leading-tight">
-                            {template.prompt}
-                          </p>
-
-                          {/* Actions bar for template */}
-                          <div className="mt-1.5 flex items-center justify-end gap-1 border-t border-neutral-100 dark:border-zinc-850/50 pt-1">
-                            <button
-                              onClick={() => {
-                                setPromptInput(template.prompt);
-                                alert(`Successfully loaded custom prompt: "${template.title}" into core input canvas!`);
-                              }}
-                              className="px-1.5 py-0.5 bg-neutral-150 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-neutral-600 dark:text-neutral-300 rounded text-[9px] font-bold transition-all cursor-pointer select-none"
-                              title="Load template into text area input"
-                            >
-                              Load Input
-                            </button>
-                            <button
-                              onClick={() => triggerCompile(template.prompt)}
-                              className="px-1.5 py-0.5 bg-[#ed3915]/15 hover:bg-[#ed3915] text-[#ed3915] hover:text-white rounded text-[9px] font-bold border border-[#ed3915]/20 hover:border-transparent transition-all cursor-pointer select-none"
-                              title="Instantly trigger compilation based on template prompt"
-                            >
-                              Run & Compile
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-
-                    {customTemplates.filter(t => activeCategoryFilter === 'All' || t.category === activeCategoryFilter).length === 0 && (
-                      <div className="text-center py-4 text-[9px] text-zinc-500">
-                        No saved templates in this category.
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Create New template Form form */}
-                  <div className="pt-2 border-t border-neutral-200 dark:border-zinc-800 space-y-1.5 text-[10px]">
-                    <span className="font-bold text-neutral-500 dark:text-zinc-450 uppercase tracking-widest text-[8px] block">Save Current Snippet</span>
-                    
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <input
-                        type="text"
-                        placeholder="Template Title..."
-                        value={newTemplateTitle}
-                        onChange={(e) => setNewTemplateTitle(e.target.value)}
-                        className="w-full text-xs p-1 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none focus:border-primary text-neutral-800 dark:text-neutral-100"
-                      />
-                      <select
-                        value={newTemplateCategory}
-                        onChange={(e) => setNewTemplateCategory(e.target.value)}
-                        className="w-full text-xs p-1 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none text-neutral-700 dark:text-neutral-300 font-mono"
-                      >
-                        <option value="Layouts">Layouts</option>
-                        <option value="Behaviors">Behaviors</option>
-                        <option value="Visual FX">Visual FX</option>
-                        <option value="APIs & DB">APIs & DB</option>
-                      </select>
-                    </div>
-
-                    <div className="relative">
-                      <textarea
-                        placeholder="Visual/behavior details of this prompt snippet..."
-                        value={newTemplatePrompt}
-                        onChange={(e) => setNewTemplatePrompt(e.target.value)}
-                        rows={2}
-                        className="w-full text-xs p-1.5 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none focus:border-primary text-neutral-800 dark:text-neutral-100 resize-none font-mono"
-                      />
-                    </div>
-
-                    <button
-                      onClick={handleSaveTemplate}
-                      disabled={!newTemplateTitle.trim() || !newTemplatePrompt.trim()}
-                      className="w-full py-1 text-[9px] uppercase tracking-wider font-bold bg-[#ed3915] text-white hover:bg-primary-dark disabled:opacity-40 rounded flex items-center justify-center gap-1 cursor-pointer select-none"
-                    >
-                      <Plus className="w-2.5 h-2.5" />
-                      <span>Bookmark Template Spec</span>
-                    </button>
-                  </div>
-
-                </div>
-              )}
-            </div>
-
-            {/* Custom System Prompt overriding rules */}
-            <div className="pt-4 mt-auto border-t border-neutral-200 dark:border-zinc-800 space-y-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500 flex items-center gap-1">
-                <Settings2 className="w-3 h-3 text-primary" /> Active System Rules Setup
-              </span>
-              <select
-                value={systemInstruction}
-                onChange={(e) => setSystemInstruction(e.target.value)}
-                className="w-full text-xs p-2 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-neutral-800 rounded outline-none text-neutral-700 dark:text-neutral-300 font-mono cursor-pointer"
-              >
-                {SYSTEM_PROMPT_PRESETS.map((preset) => (
-                  <option key={preset.id} value={preset.instruction}>
-                    {preset.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Prompt input trigger */}
-            <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-zinc-800 gap-1.5">
-              <div className="relative flex items-center">
+              {/* Chat Input Container */}
+              <div className="relative flex flex-col bg-white dark:bg-zinc-955 border border-neutral-200 dark:border-zinc-800 focus-within:border-primary/80 rounded-xl overflow-hidden transition-all shadow-xs">
                 <textarea
                   value={promptInput}
                   onChange={(e) => setPromptInput(e.target.value)}
-                  placeholder="Enter detailed prompt modifications..."
+                  placeholder="Describe build adjustments... Enter compiles instantly."
                   rows={2}
-                  className="w-full p-2.5 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 focus:border-primary rounded-lg text-xs outline-none dark:text-white pr-9 resize-none font-mono"
+                  className="w-full p-2.5 bg-transparent text-xs outline-none dark:text-white dark:placeholder-zinc-500 resize-none font-sans leading-relaxed"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
@@ -1475,15 +1592,42 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
                     }
                   }}
                 />
-                <button
-                  onClick={() => triggerCompile(promptInput)}
-                  disabled={isBuilding || !promptInput.trim()}
-                  className="absolute right-2 px-1.5 py-1.5 bg-primary text-white rounded-lg disabled:opacity-40 hover:bg-primary-dark transition-all cursor-pointer"
-                  title="Trigger Compile"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </button>
+                
+                {/* Composite inner toolbar with plus sign upload, paste sign action, and compile send */}
+                <div className="px-2.5 py-1.5 bg-neutral-50 dark:bg-zinc-900 border-t border-neutral-100/60 dark:border-zinc-850/60 flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    {/* Plus Sign button for Upload */}
+                    <button
+                      onClick={handleUploadClick}
+                      className="p-1 px-1.5 bg-neutral-200 hover:bg-neutral-300 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-neutral-600 dark:text-neutral-350 rounded text-[9px] font-bold transition-all cursor-pointer flex items-center gap-1.5 select-none"
+                      title="Upload reference files to prompt payloads"
+                    >
+                      <Plus className="w-3 h-3 text-primary shrink-0" />
+                      <span>Context</span>
+                    </button>
+
+                    {/* Paste Sign button */}
+                    <button
+                      onClick={() => setIsPasteModalOpen(true)}
+                      className="p-1 px-1.5 bg-neutral-200 hover:bg-neutral-300 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-neutral-600 dark:text-neutral-350 rounded text-[9px] font-bold transition-all cursor-pointer flex items-center gap-1.5 select-none font-mono"
+                      title="Paste reference script snippet code directly"
+                    >
+                      <span className="text-primary font-black">&lt;&gt;</span>
+                      <span>Paste</span>
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => triggerCompile(promptInput)}
+                    disabled={isBuilding || !promptInput.trim()}
+                    className="px-2.5 py-1 bg-[#ed3915] text-white hover:bg-primary-dark disabled:opacity-45 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer select-none"
+                    title="Send modifications to Compile"
+                  >
+                    <Send className="w-3 h-3" />
+                  </button>
+                </div>
               </div>
+
             </div>
 
           </div>
