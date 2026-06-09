@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Code2, Sparkles, Send, Upload, FileCode, CheckCircle, Database, 
   Github, Download, Layers, Settings2, ShieldCheck, Cpu, RefreshCw, AlertTriangle, HelpCircle, ArrowLeft, History, ArrowRight,
-  Eye, Columns
+  Eye, Columns, Terminal, Trash2, Search
 } from 'lucide-react';
 import { Build, UserProfile, AVAILABLE_MODELS, SYSTEM_PROMPT_PRESETS } from '../types';
 import { GitHubService, GitHubRepo } from '../services/githubService';
@@ -36,6 +36,271 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
 
   // Split View Mode (split-screen / preview full-pane / code full-pane)
   const [viewMode, setViewMode] = useState<'split' | 'preview' | 'code'>('preview');
+
+  // Real-time Console State & Types
+  interface ConsoleLogEntry {
+    type: 'log' | 'error' | 'warn' | 'info' | 'network';
+    message: string;
+    timestamp: string;
+    method?: string;
+    url?: string;
+    status?: string | number;
+    ok?: boolean;
+  }
+
+  const [consoleLogs, setConsoleLogs] = useState<ConsoleLogEntry[]>([
+    {
+      type: 'info',
+      message: 'System Console stream started. Real-time preview events, errors, and endpoints will update here.',
+      timestamp: new Date().toLocaleTimeString()
+    }
+  ]);
+  const [isConsoleOpen, setIsConsoleOpen] = useState(true);
+  const [consoleFilter, setConsoleFilter] = useState<'all' | 'log' | 'error' | 'network'>('all');
+  const [consoleSearch, setConsoleSearch] = useState('');
+
+  // 1. Clear Console logs
+  const handleClearConsole = () => {
+    setConsoleLogs([
+      {
+        type: 'info',
+        message: 'Console environment logs cleared by user.',
+        timestamp: new Date().toLocaleTimeString()
+      }
+    ]);
+  };
+
+  // 2. Proxy source document mapping to automatically inject logging hooks
+  const getInjectedSrcDoc = () => {
+    if (!codeContent) return '';
+    const proxyScript = `
+      <script>
+        (function() {
+          const _log = console.log;
+          const _error = console.error;
+          const _warn = console.warn;
+          const _info = console.info;
+
+          function emit(type, args) {
+            try {
+              const serialized = Array.from(args).map(arg => {
+                if (arg === null) return 'null';
+                if (arg === undefined) return 'undefined';
+                if (typeof arg === 'object') {
+                  try {
+                    return JSON.stringify(arg);
+                  } catch(e) {
+                    return String(arg);
+                  }
+                }
+                return String(arg);
+              }).join(' ');
+
+              window.parent.postMessage({
+                type: 'PREVIEW_CONSOLE_LOG',
+                logType: type,
+                message: serialized,
+                timestamp: new Date().toLocaleTimeString()
+              }, '*');
+            } catch (e) {
+              _error("Failed to post message", e);
+            }
+          }
+
+          console.log = function() {
+            _log.apply(console, arguments);
+            emit('log', arguments);
+          };
+          console.error = function() {
+            _error.apply(console, arguments);
+            emit('error', arguments);
+          };
+          console.warn = function() {
+            _warn.apply(console, arguments);
+            emit('warn', arguments);
+          };
+          console.info = function() {
+            _info.apply(console, arguments);
+            emit('info', arguments);
+          };
+
+          window.onerror = function(message, source, lineno, colno, error) {
+            emit('error', [message + ' (line ' + lineno + ':' + colno + ')']);
+            return false;
+          };
+
+          const _originalFetch = window.fetch;
+          window.fetch = async function(...args) {
+            const url = args[0];
+            const options = args[1] || {};
+            const method = options.method || 'GET';
+            window.parent.postMessage({
+              type: 'PREVIEW_NETWORK_LOG',
+              method: method,
+              url: String(url),
+              timestamp: new Date().toLocaleTimeString(),
+              status: 'pending'
+            }, '*');
+
+            try {
+              const response = await _originalFetch(...args);
+              window.parent.postMessage({
+                type: 'PREVIEW_NETWORK_LOG',
+                method: method,
+                url: String(url),
+                timestamp: new Date().toLocaleTimeString(),
+                status: response.status,
+                ok: response.ok
+              }, '*');
+              return response;
+            } catch (err) {
+              window.parent.postMessage({
+                type: 'PREVIEW_NETWORK_LOG',
+                method: method,
+                url: String(url),
+                timestamp: new Date().toLocaleTimeString(),
+                status: 'failed',
+                error: err.message
+              }, '*');
+              throw err;
+            }
+          };
+
+          const _XMLHttpRequest = window.XMLHttpRequest;
+          window.XMLHttpRequest = function() {
+            const xhr = new _XMLHttpRequest();
+            const send = xhr.send;
+            const open = xhr.open;
+            let method = 'GET';
+            let url = '';
+
+            xhr.open = function(_method, _url) {
+              method = _method;
+              url = _url;
+              return open.apply(xhr, arguments);
+            };
+
+            xhr.send = function() {
+              window.parent.postMessage({
+                type: 'PREVIEW_NETWORK_LOG',
+                method: method,
+                url: String(url),
+                timestamp: new Date().toLocaleTimeString(),
+                status: 'pending'
+              }, '*');
+
+              xhr.addEventListener('load', function() {
+                window.parent.postMessage({
+                  type: 'PREVIEW_NETWORK_LOG',
+                  method: method,
+                  url: String(url),
+                  timestamp: new Date().toLocaleTimeString(),
+                  status: xhr.status,
+                  ok: xhr.status >= 200 && xhr.status < 300
+                }, '*');
+              });
+
+              xhr.addEventListener('error', function() {
+                window.parent.postMessage({
+                  type: 'PREVIEW_NETWORK_LOG',
+                  method: method,
+                  url: String(url),
+                  timestamp: new Date().toLocaleTimeString(),
+                  status: 'failed'
+                }, '*');
+              });
+
+              return send.apply(xhr, arguments);
+            };
+
+            return xhr;
+          };
+
+        })();
+      </script>
+    `;
+
+    if (codeContent.includes('<head>')) {
+      return codeContent.replace('<head>', '<head>' + proxyScript);
+    } else if (codeContent.includes('<html>')) {
+      return codeContent.replace('<html>', '<html>' + proxyScript);
+    } else {
+      return proxyScript + codeContent;
+    }
+  };
+
+  // 3. Listen to real-time events triggered by the preview sandbox
+  useEffect(() => {
+    const handlePreviewMessage = (event: MessageEvent) => {
+      if (!event.data) return;
+
+      if (event.data.type === 'PREVIEW_CONSOLE_LOG') {
+        const { logType, message, timestamp } = event.data;
+        setConsoleLogs((prev) => [
+          ...prev,
+          {
+            type: logType,
+            message: message,
+            timestamp: timestamp
+          }
+        ]);
+      } else if (event.data.type === 'PREVIEW_NETWORK_LOG') {
+        const { method, url, timestamp, status, statusText, ok, error } = event.data;
+
+        setConsoleLogs((prev) => {
+          const nextLogs = [...prev];
+          
+          if (status !== 'pending') {
+            const lastPendingIdx = nextLogs.map(item => item.type === 'network' && item.url === url && item.status === 'pending')
+              .lastIndexOf(true);
+            
+            if (lastPendingIdx !== -1) {
+              nextLogs[lastPendingIdx] = {
+                type: 'network',
+                timestamp,
+                method,
+                url,
+                status,
+                ok,
+                message: error ? `❌ ${method} ${url} failed: ${error}` : `📡 ${method} ${url} - ${status} (${ok ? 'OK' : 'Error'})`
+              };
+              return nextLogs;
+            }
+          }
+
+          nextLogs.push({
+            type: 'network',
+            timestamp,
+            method,
+            url,
+            status: status || 'pending',
+            ok,
+            message: status === 'pending' 
+              ? `📡 [Pending] ${method} ${url}` 
+              : error 
+              ? `❌ ${method} ${url} failed: ${error}` 
+              : `📡 ${method} ${url} - ${status} (${ok ? 'OK' : 'Error'})`
+          });
+          return nextLogs;
+        });
+      }
+    };
+
+    window.addEventListener('message', handlePreviewMessage);
+    return () => window.removeEventListener('message', handlePreviewMessage);
+  }, []);
+
+  // 4. Alert user whenever environment is recompiled/reloaded
+  useEffect(() => {
+    setConsoleLogs((prev) => [
+      ...prev,
+      {
+        type: 'info',
+        message: '🔄 Live Sandbox Environment re-synchronized. All logs reset.',
+        timestamp: new Date().toLocaleTimeString()
+      }
+    ]);
+  }, [codeContent]);
   
   // Custom direct code pasting & file upload override handlers
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
@@ -893,7 +1158,7 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
               <iframe
                 id="live-sandbox-preview"
                 ref={iframeRef}
-                srcDoc={codeContent}
+                srcDoc={getInjectedSrcDoc()}
                 className="w-full h-full bg-white block"
                 sandbox="allow-scripts"
                 title="Workspace Preview Sandbox"
@@ -961,6 +1226,161 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
                   placeholder="<!-- Synthesised Code will load here -->"
                 />
               </div>
+            </div>
+
+            {/* Real-Time Console Panel Drawer */}
+            <div className="border-t border-neutral-200 dark:border-zinc-800 bg-neutral-50 dark:bg-zinc-950 flex flex-col shrink-0">
+              {/* Console Header Bar */}
+              <div 
+                className="h-10 px-4 flex items-center justify-between border-b border-neutral-200 dark:border-zinc-800 select-none cursor-pointer hover:bg-neutral-100 dark:hover:bg-zinc-900 transition-colors"
+                onClick={() => setIsConsoleOpen(!isConsoleOpen)}
+              >
+                <div className="flex items-center gap-2">
+                  <Terminal className={`w-4 h-4 text-[#ed3915] transition-transform ${isConsoleOpen ? 'rotate-0' : '-rotate-90'}`} />
+                  <span className="text-xs font-black uppercase tracking-wider text-neutral-800 dark:text-neutral-100">
+                    Live Preview Debug Console
+                  </span>
+                  
+                  {/* Badge diagnostics counts */}
+                  <div className="flex items-center gap-1 ml-2">
+                    <span className="px-1.5 py-0.5 text-[9px] font-bold bg-neutral-200 dark:bg-zinc-900 text-neutral-600 dark:text-neutral-400 rounded-md">
+                      {consoleLogs.length} events
+                    </span>
+                    {consoleLogs.filter(l => l.type === 'error').length > 0 && (
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-red-500/10 text-red-500 rounded-md">
+                        {consoleLogs.filter(l => l.type === 'error').length} Errors
+                      </span>
+                    )}
+                    {consoleLogs.filter(l => l.type === 'network').length > 0 && (
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-[#ed3915]/10 text-[#ed3915] rounded-md">
+                        {consoleLogs.filter(l => l.type === 'network').length} Network
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                  {/* Action buttons */}
+                  <button 
+                    onClick={handleClearConsole}
+                    className="p-1 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-200 dark:hover:bg-zinc-800 rounded transition-all cursor-pointer"
+                    title="Clear Console Output Log"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button 
+                    onClick={() => setIsConsoleOpen(!isConsoleOpen)}
+                    className="text-[10px] uppercase font-bold text-neutral-400 hover:text-primary transition-colors cursor-pointer"
+                  >
+                    {isConsoleOpen ? 'Minimize ▽' : 'Expand △'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Console Body Area */}
+              {isConsoleOpen && (
+                <div className="h-48 flex flex-col overflow-hidden bg-neutral-950 text-neutral-200 font-mono text-[11px] leading-relaxed">
+                  
+                  {/* Filter Toolbar controls */}
+                  <div className="h-9 shrink-0 bg-neutral-900 border-b border-zinc-850 px-3 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-1 select-none">
+                      <button
+                        onClick={() => setConsoleFilter('all')}
+                        className={`px-2.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                          consoleFilter === 'all' 
+                            ? 'bg-[#ed3915] text-white' 
+                            : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                        }`}
+                      >
+                        All Current Logs ({consoleLogs.length})
+                      </button>
+                      <button
+                        onClick={() => setConsoleFilter('log')}
+                        className={`px-2.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                          consoleFilter === 'log' 
+                            ? 'bg-blue-600 text-white' 
+                            : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                        }`}
+                      >
+                        Logs ({consoleLogs.filter(l => l.type === 'log' || l.type === 'info').length})
+                      </button>
+                      <button
+                        onClick={() => setConsoleFilter('error')}
+                        className={`px-2.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                          consoleFilter === 'error' 
+                            ? 'bg-red-600 text-white' 
+                            : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                        }`}
+                      >
+                        Errors ({consoleLogs.filter(l => l.type === 'error').length})
+                      </button>
+                      <button
+                        onClick={() => setConsoleFilter('network')}
+                        className={`px-2.5 py-0.5 rounded text-[10px] font-black transition-all cursor-pointer ${
+                          consoleFilter === 'network' 
+                            ? 'bg-[#ed3915]/20 text-[#ed3915] border border-[#ed3915]/30' 
+                            : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                        }`}
+                      >
+                        Network/XHR ({consoleLogs.filter(l => l.type === 'network').length})
+                      </button>
+                    </div>
+
+                    {/* Search string filtration */}
+                    <div className="relative max-w-xs w-full sm:w-48">
+                      <Search className="absolute left-2 top-2.5 w-3 h-3 text-zinc-500" />
+                      <input
+                        type="text"
+                        placeholder="Filter output..."
+                        value={consoleSearch}
+                        onChange={(e) => setConsoleSearch(e.target.value)}
+                        className="w-full pl-7 pr-2 py-1 bg-zinc-950 border border-zinc-800 rounded-md text-[10px] text-zinc-100 placeholder-zinc-500 outline-none focus:border-zinc-700 font-sans"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Logs Event Scroll view */}
+                  <div className="flex-1 overflow-y-auto p-3 space-y-1.5 custom-sync-scrollbar">
+                    {consoleLogs
+                      .filter(log => {
+                        if (consoleFilter === 'log') return log.type === 'log' || log.type === 'info' || log.type === 'warn';
+                        if (consoleFilter === 'error') return log.type === 'error';
+                        if (consoleFilter === 'network') return log.type === 'network';
+                        return true;
+                      })
+                      .filter(log => {
+                        if (!consoleSearch.trim()) return true;
+                        return log.message.toLowerCase().includes(consoleSearch.toLowerCase());
+                      })
+                      .map((log, index) => {
+                        let logColor = 'text-zinc-300';
+                        if (log.type === 'error') logColor = 'text-red-400 bg-red-950/25 border-l-2 border-red-500 pl-1.5';
+                        if (log.type === 'warn') logColor = 'text-amber-400 bg-amber-950/20 border-l-2 border-amber-500 pl-1.5';
+                        if (log.type === 'info') logColor = 'text-emerald-400 pl-1';
+                        if (log.type === 'network') {
+                          logColor = log.status === 'pending' 
+                            ? 'text-neutral-400 italic pl-1' 
+                            : log.ok === false 
+                            ? 'text-red-400 bg-red-950/15 border-l-2 border-red-505 pl-1.5' 
+                            : 'text-[#ed3915]/90 pl-1';
+                        }
+
+                        return (
+                          <div key={index} className={`flex items-start gap-2.5 py-0.5 border-b border-zinc-900/50 hover:bg-zinc-900 transition-colors ${logColor}`}>
+                            <span className="text-zinc-600 text-[9px] select-none uppercase py-0.5 shrink-0 font-mono">{log.timestamp}</span>
+                            <span className="break-all whitespace-pre-wrap font-mono">{log.message}</span>
+                          </div>
+                        );
+                      })}
+                    {consoleLogs.length === 0 && (
+                      <div className="text-zinc-500 text-center py-6">
+                        No telemetry logs registered in current stream scope.
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              )}
             </div>
 
           </div>
