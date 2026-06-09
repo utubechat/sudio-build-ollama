@@ -35,7 +35,7 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   const [codeContent, setCodeContent] = useState('<!-- Tap Compile to initiate workspace -->');
 
   // Split View Mode (split-screen / preview full-pane / code full-pane)
-  const [viewMode, setViewMode] = useState<'split' | 'preview' | 'code'>('split');
+  const [viewMode, setViewMode] = useState<'split' | 'preview' | 'code'>('preview');
   
   // Custom direct code pasting & file upload override handlers
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
@@ -563,43 +563,48 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
           </div>
         </div>
 
-        {/* Centered Segmented View Mode Toggle */}
-        <div className="flex items-center p-0.5 bg-neutral-100 dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 rounded-xl shadow-xs select-none">
+        {/* Centered Premium View Mode Tab Switcher */}
+        <div className="flex items-center p-1 bg-neutral-150 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-850 rounded-2xl shadow-sm select-none">
           <button
+            id="tab-preview-mode"
             onClick={() => setViewMode('preview')}
-            className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+            className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer select-none ${
               viewMode === 'preview' 
-                ? 'bg-[#ed3915] text-white shadow-xs' 
-                : 'text-neutral-500 hover:text-neutral-850 dark:hover:text-zinc-200'
+                ? 'bg-[#ed3915] text-white shadow-md scale-[1.02]' 
+                : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-zinc-200 hover:bg-neutral-100 dark:hover:bg-zinc-900'
             }`}
-            title="Preview Mode Only"
+            title="Switch to Live Preview screen"
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Preview</span>
+            <Eye className="w-4 h-4" />
+            <span>Live Preview</span>
           </button>
+          
           <button
-            onClick={() => setViewMode('split')}
-            className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
-              viewMode === 'split' 
-                ? 'bg-neutral-200 dark:bg-zinc-800 text-neutral-900 dark:text-neutral-100 shadow-xs' 
-                : 'text-neutral-500 hover:text-neutral-850 dark:hover:text-zinc-200'
-            }`}
-            title="Split-Screen View"
-          >
-            <Columns className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Split</span>
-          </button>
-          <button
+            id="tab-code-mode"
             onClick={() => setViewMode('code')}
-            className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+            className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer select-none ${
               viewMode === 'code' 
-                ? 'bg-[#ed3915] text-white shadow-xs' 
-                : 'text-neutral-500 hover:text-neutral-850 dark:hover:text-zinc-200'
+                ? 'bg-[#ed3915] text-white shadow-md scale-[1.02]' 
+                : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-zinc-200 hover:bg-neutral-100 dark:hover:bg-zinc-900'
             }`}
-            title="Code Editor Only"
+            title="Switch to TypeScript & HTML Code view"
           >
-            <Code2 className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Code</span>
+            <Code2 className="w-4 h-4" />
+            <span>Code View</span>
+          </button>
+
+          <button
+            id="tab-split-mode"
+            onClick={() => setViewMode('split')}
+            className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer select-none ${
+              viewMode === 'split' 
+                ? 'bg-neutral-300 dark:bg-zinc-800 text-neutral-900 dark:text-neutral-100 shadow-md' 
+                : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-zinc-200 hover:bg-neutral-100 dark:hover:bg-zinc-900'
+            }`}
+            title="Enable dual Split Screen canvas"
+          >
+            <Columns className="w-4 h-4" />
+            <span className="hidden sm:inline">Split Screen</span>
           </button>
         </div>
 
