@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Code2, Sparkles, Send, Upload, FileCode, CheckCircle, Database, 
   Github, Download, Layers, Settings2, ShieldCheck, Cpu, RefreshCw, AlertTriangle, HelpCircle, ArrowLeft, History, ArrowRight,
-  Eye, Columns, Terminal, Trash2, Search
+  Eye, Columns, Terminal, Trash2, Search, Copy, Image as LucideImage, Plus, Bookmark
 } from 'lucide-react';
 import { Build, UserProfile, AVAILABLE_MODELS, SYSTEM_PROMPT_PRESETS } from '../types';
 import { GitHubService, GitHubRepo } from '../services/githubService';
@@ -25,7 +25,90 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   isDarkMode,
 }) => {
   // Navigation / Tabs in right zone
-  const [activeRightPanel, setActiveRightPanel] = useState<'features' | 'console' | 'database'>('features');
+  const [activeRightPanel, setActiveRightPanel] = useState<'features' | 'console' | 'database' | 'assets'>('features');
+
+  // Asset Image Generator State
+  const [imagePrompt, setImagePrompt] = useState('');
+  const [imageRatio, setImageRatio] = useState<'1:1' | '16:9' | '4:3' | '3:4'>('16:9');
+  const [imageType, setImageType] = useState<'hero' | 'icon' | 'other'>('hero');
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [generatedImages, setGeneratedImages] = useState<{
+    url: string;
+    prompt: string;
+    ratio: string;
+    date: string;
+    isFallback: boolean;
+  }[]>(() => {
+    const saved = localStorage.getItem('buildstudio_assets_images');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // Sync generated images to localStorage
+  useEffect(() => {
+    localStorage.setItem('buildstudio_assets_images', JSON.stringify(generatedImages));
+  }, [generatedImages]);
+
+  const handleGenerateAssetImage = async () => {
+    if (!imagePrompt.trim()) return;
+    setIsGeneratingImage(true);
+    setConsoleLogs(prev => [
+      ...prev,
+      {
+        type: 'info',
+        message: `⏳ Starting image asset generation: "${imagePrompt}" (${imageRatio})...`,
+        timestamp: new Date().toLocaleTimeString(),
+      }
+    ]);
+    try {
+      const response = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: imagePrompt,
+          aspectRatio: imageRatio,
+        }),
+      });
+
+      const data = await response.json();
+      if (response.ok && data.status === 'success' && data.imageUrl) {
+        setGeneratedImages(prev => [
+          {
+            url: data.imageUrl,
+            prompt: imagePrompt,
+            ratio: imageRatio,
+            date: new Date().toLocaleTimeString(),
+            isFallback: !!data.isFallback,
+          },
+          ...prev,
+        ]);
+        
+        // Add log entry to our System Debug Console
+        setConsoleLogs(prev => [
+          ...prev,
+          {
+            type: 'info',
+            message: `🎨 Image Asset Generated successfully: "${imagePrompt}" (${imageRatio}) ${data.isFallback ? '[Picsum Fallback]' : '[Real Base64 Image Details]'}`,
+            timestamp: new Date().toLocaleTimeString(),
+          }
+        ]);
+      } else {
+        throw new Error(data.error || 'Server rejected image generation');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setConsoleLogs(prev => [
+        ...prev,
+        {
+          type: 'error',
+          message: `❌ Image Asset Generation failed: ${err.message}`,
+          timestamp: new Date().toLocaleTimeString(),
+        }
+      ]);
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
 
   // State Management
   const [selectedModel, setSelectedModel] = useState('llama3:8b');
@@ -34,8 +117,127 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
   const [promptInput, setPromptInput] = useState(initialPrompt || '');
   const [codeContent, setCodeContent] = useState('<!-- Tap Compile to initiate workspace -->');
 
+  // Custom Reusable Prompt Template types and state
+  interface CustomPromptTemplate {
+    id: string;
+    title: string;
+    prompt: string;
+    category: string;
+  }
+
+  const defaultTemplates: CustomPromptTemplate[] = [
+    {
+      id: 'pt-1',
+      title: 'Modern Glassmorphic Cards',
+      prompt: 'Add 3 modern glassmorphic cards with subtle background blur, borders with 15% opacity, neon hex accent hover transitions, and clean dark ambient drop shadows.',
+      category: 'Layouts'
+    },
+    {
+      id: 'pt-2',
+      title: 'Interactive Confetti Engine',
+      prompt: 'Implement a gorgeous custom HTML5 Canvas particle explosion particle confetti effect that fires fully dynamic bursts with high performance on click of action triggers.',
+      category: 'Visual FX'
+    },
+    {
+      id: 'pt-3',
+      title: 'Real-time Live search filter',
+      prompt: 'Integrate an asynchronous client-side list-search input that instantly performs query filtering using state bounds, updating matching list items with smooth transition fades.',
+      category: 'Behaviors'
+    },
+    {
+      id: 'pt-4',
+      title: 'Web Audio Oscillator Chimes',
+      prompt: 'Synthesise a lightweight custom Synthesizer instrument with the Web Audio API that delivers elegant high-pitch retro bell chimes on mouse triggers.',
+      category: 'Behaviors'
+    }
+  ];
+
+  const [customTemplates, setCustomTemplates] = useState<CustomPromptTemplate[]>(() => {
+    const saved = localStorage.getItem('buildstudio_custom_templates');
+    return saved ? JSON.parse(saved) : defaultTemplates;
+  });
+
+  const [newTemplateTitle, setNewTemplateTitle] = useState('');
+  const [newTemplatePrompt, setNewTemplatePrompt] = useState('');
+  const [newTemplateCategory, setNewTemplateCategory] = useState('Layouts');
+  const [activeCategoryFilter, setActiveCategoryFilter] = useState('All');
+  const [isPromptBuilderOpen, setIsPromptBuilderOpen] = useState(false);
+
+  // Sync custom prompt templates to local storage
+  useEffect(() => {
+    localStorage.setItem('buildstudio_custom_templates', JSON.stringify(customTemplates));
+  }, [customTemplates]);
+
+  const handleSaveTemplate = () => {
+    if (!newTemplateTitle.trim() || !newTemplatePrompt.trim()) {
+      alert('Please fill out both the Template Title and the Prompt text.');
+      return;
+    }
+    const newTemplate: CustomPromptTemplate = {
+      id: 'pt-' + Date.now(),
+      title: newTemplateTitle.trim(),
+      prompt: newTemplatePrompt.trim(),
+      category: newTemplateCategory
+    };
+    setCustomTemplates(prev => [newTemplate, ...prev]);
+    setNewTemplateTitle('');
+    setNewTemplatePrompt('');
+    alert('Prompt Template saved successfully!');
+  };
+
+  const handleDeleteTemplate = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm('Are you sure you want to delete this prompt template?')) {
+      setCustomTemplates(prev => prev.filter(t => t.id !== id));
+    }
+  };
+
   // Split View Mode (split-screen / preview full-pane / code full-pane)
   const [viewMode, setViewMode] = useState<'split' | 'preview' | 'code'>('preview');
+
+  // Specialized Terminal theme states for the code editor
+  const [editorTheme, setEditorTheme] = useState<'default' | 'terminal'>('default');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLPreElement>(null);
+
+  const handleScroll = () => {
+    if (textareaRef.current && highlightRef.current) {
+      highlightRef.current.scrollTop = textareaRef.current.scrollTop;
+      highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
+    }
+  };
+
+  const getHighlightedHTML = (code: string) => {
+    if (!code) return '<span class="text-zinc-650 font-sans italic">// Start hacking below...</span>';
+    
+    let escaped = code
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    // HTML comments
+    escaped = escaped.replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="text-zinc-500 italic opacity-60">$1</span>');
+    // JS comments
+    escaped = escaped.replace(/(\/\/.*)/g, '<span class="text-zinc-500 italic opacity-60">$1</span>');
+    escaped = escaped.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="text-zinc-500 italic opacity-60">$1</span>');
+
+    // Tags
+    escaped = escaped.replace(/(&lt;\/?[a-zA-Z0-9:-]+)/g, '<span class="text-[#39FF14] font-bold" style="text-shadow: 0 0 3px rgba(57,255,20,0.4)">$1</span>');
+    escaped = escaped.replace(/(\/?&gt;)/g, '<span class="text-[#39FF14] font-bold" style="text-shadow: 0 0 3px rgba(57,255,20,0.4)">$1</span>');
+
+    // Attributes
+    escaped = escaped.replace(/\b([a-zA-Z0-9_-]+)=/g, '<span class="text-[#00FFFF]" style="text-shadow: 0 0 3px rgba(0,255,255,0.4)">$1</span>=');
+
+    // Strings
+    escaped = escaped.replace(/("[^"\\]*(?:\\.[^"\\]*)*")/g, '<span class="text-[#FF00E4] font-medium" style="text-shadow: 0 0 3px rgba(255,0,228,0.4)">$1</span>');
+    escaped = escaped.replace(/('[^'\\]*(?:\\.[^'\\]*)*')/g, '<span class="text-[#FF00E4] font-medium" style="text-shadow: 0 0 3px rgba(255,0,228,0.4)">$1</span>');
+    escaped = escaped.replace(/(`[^`\\]*(?:\\.[^`\\]*)*`)/g, '<span class="text-[#FF00E4] font-medium" style="text-shadow: 0 0 3px rgba(255,0,228,0.4)">$1</span>');
+
+    // JS Keywords
+    escaped = escaped.replace(/\b(const|let|var|function|return|import|export|default|class|extends|async|await|if|else|for|while|new|this|true|false)\b/g, '<span class="text-[#FFCC00] font-bold" style="text-shadow: 0 0 3px rgba(255,204,0,0.4)">$1</span>');
+
+    return escaped;
+  };
 
   // Real-time Console State & Types
   interface ConsoleLogEntry {
@@ -681,6 +883,34 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
     setGitStatusMsg('GitHub Integration disconnected.');
   };
 
+  // Synchronize component reactive states with GitHubService status tracker
+  useEffect(() => {
+    const unsub = GitHubService.subscribe((status) => {
+      if (status.state === 'syncing') {
+        setIsPushingGithub(true);
+        setGitStatusType('info');
+        setGitStatusMsg(status.lastAction || 'Pushing code to GitHub...');
+      } else if (status.state === 'synced') {
+        setIsPushingGithub(false);
+        setGitStatusType('success');
+        if (status.lastSuccessAt) {
+          setGitStatusMsg(`Active repository synced successfully at ${status.lastSuccessAt}!`);
+        } else {
+          setGitStatusMsg('Active repository synced successfully!');
+        }
+      } else if (status.state === 'error') {
+        setIsPushingGithub(false);
+        setGitStatusType('error');
+        setGitStatusMsg(status.lastError || 'GitHub operation failed.');
+      } else {
+        setIsPushingGithub(false);
+        setGitStatusType('');
+        setGitStatusMsg('');
+      }
+    });
+    return unsub;
+  }, []);
+
   const handlePushCode = async () => {
     if (!gitToken) return;
     if (!selectedRepoFullName) {
@@ -696,17 +926,21 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
       return;
     }
 
-    setIsPushingGithub(true);
-    setGitStatusType('info');
-    setGitStatusMsg(`Pushing ${gitFilePath} to ${selectedRepoFullName}...`);
-
     try {
       if (gitToken === 'ghp_sandboxTokenOAuthBuildStudioZeroFriction' || gitToken.startsWith('ghp_sandboxToken')) {
+        GitHubService.updateStatus({
+          state: 'syncing',
+          lastAction: `Pushing ${gitFilePath} to ${selectedRepoFullName}...`,
+          lastError: undefined
+        });
         await new Promise(resolve => setTimeout(resolve, 1500));
         const simulatedUrl = `https://github.com/${owner}/${repo}/blob/${gitBranch}/${gitFilePath}`;
         setGithubUrl(simulatedUrl);
-        setGitStatusType('success');
-        setGitStatusMsg(`Synced Successfully in Sandbox Mode!`);
+        GitHubService.updateStatus({
+          state: 'synced',
+          lastSuccessAt: new Date().toLocaleTimeString(),
+          lastError: undefined
+        });
         alert(`Zero-friction commit successful!\nPushed file simulated: ${gitFilePath} in sandbox repo: ${selectedRepoFullName}`);
         return;
       }
@@ -722,15 +956,9 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
       });
 
       setGithubUrl(pushRes.html_url);
-      setGitStatusType('success');
-      setGitStatusMsg(`Active repository synched successfully! Commit SHA: ${pushRes.sha.slice(0, 8)}`);
       alert(`Synchronisation successful!\nPushed build to GitHub repository: ${selectedRepoFullName}`);
     } catch (err: any) {
       console.error(err);
-      setGitStatusType('error');
-      setGitStatusMsg(`Direct Commit Failed: ${err.message}`);
-    } finally {
-      setIsPushingGithub(false);
     }
   };
 
@@ -1068,6 +1296,151 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
               </div>
             </div>
 
+            {/* Prompt Template Builder Section */}
+            <div className="pt-4 border-t border-neutral-250 dark:border-zinc-850 space-y-2.5">
+              <button
+                onClick={() => setIsPromptBuilderOpen(!isPromptBuilderOpen)}
+                className="w-full flex items-center justify-between text-[11px] font-black uppercase tracking-wider text-neutral-500 dark:text-zinc-400 hover:text-[#ed3915] transition-colors focus:outline-none"
+              >
+                <div className="flex items-center gap-1.5 animate-pulse">
+                  <Bookmark className="w-3.5 h-3.5 text-primary" />
+                  <span>Prompt Builder Library</span>
+                </div>
+                <span className="text-[10px] text-zinc-500">
+                  {isPromptBuilderOpen ? 'Hide ▲' : 'Manage ' + customTemplates.length + ' Templates ▼'}
+                </span>
+              </button>
+
+              {isPromptBuilderOpen && (
+                <div className="space-y-3 bg-neutral-100 dark:bg-zinc-950 p-2.5 rounded-lg border border-neutral-200 dark:border-zinc-800 animate-fade-in text-[11px]">
+                  {/* Tiny Description */}
+                  <p className="text-[10px] text-neutral-500 leading-relaxed">
+                    Collect modular prompt snippets categorized in JSON storage. Click any item to load or immediately compile.
+                  </p>
+
+                  {/* Quick Filter tabs */}
+                  <div className="flex flex-wrap gap-1 border-b border-neutral-200 dark:border-zinc-800 pb-1.5">
+                    {['All', 'Layouts', 'Behaviors', 'Visual FX'].map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={() => setActiveCategoryFilter(cat)}
+                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-tight transition-all cursor-pointer ${
+                          activeCategoryFilter === cat 
+                            ? 'bg-[#ed3915] text-white' 
+                            : 'text-neutral-500 hover:text-neutral-800 dark:text-zinc-400 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-zinc-900'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Templates List */}
+                  <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-0.5 custom-sync-scrollbar">
+                    {customTemplates
+                      .filter(t => activeCategoryFilter === 'All' || t.category === activeCategoryFilter)
+                      .map((template) => (
+                        <div 
+                          key={template.id} 
+                          className="p-2 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-850 hover:border-[#ed3915]/30 rounded-md transition-all group relative"
+                        >
+                          <div className="flex items-start justify-between gap-1">
+                            <div>
+                              <span className="px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-neutral-150 dark:bg-zinc-800 text-zinc-400 rounded mr-1.5">
+                                {template.category}
+                              </span>
+                              <strong className="text-neutral-800 dark:text-neutral-200 text-[10px] tracking-tight">{template.title}</strong>
+                            </div>
+                            <button
+                              onClick={(e) => handleDeleteTemplate(template.id, e)}
+                              className="opacity-0 group-hover:opacity-100 text-neutral-400 hover:text-red-500 p-0.5 rounded transition-all"
+                              title="Delete saved template"
+                            >
+                              <Trash2 className="w-2.5 h-2.5" />
+                            </button>
+                          </div>
+                          <p className="text-[9px] text-zinc-500 dark:text-zinc-400 mt-1 line-clamp-2 select-text font-serif leading-tight">
+                            {template.prompt}
+                          </p>
+
+                          {/* Actions bar for template */}
+                          <div className="mt-1.5 flex items-center justify-end gap-1 border-t border-neutral-100 dark:border-zinc-850/50 pt-1">
+                            <button
+                              onClick={() => {
+                                setPromptInput(template.prompt);
+                                alert(`Successfully loaded custom prompt: "${template.title}" into core input canvas!`);
+                              }}
+                              className="px-1.5 py-0.5 bg-neutral-150 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-neutral-600 dark:text-neutral-300 rounded text-[9px] font-bold transition-all cursor-pointer select-none"
+                              title="Load template into text area input"
+                            >
+                              Load Input
+                            </button>
+                            <button
+                              onClick={() => triggerCompile(template.prompt)}
+                              className="px-1.5 py-0.5 bg-[#ed3915]/15 hover:bg-[#ed3915] text-[#ed3915] hover:text-white rounded text-[9px] font-bold border border-[#ed3915]/20 hover:border-transparent transition-all cursor-pointer select-none"
+                              title="Instantly trigger compilation based on template prompt"
+                            >
+                              Run & Compile
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                    {customTemplates.filter(t => activeCategoryFilter === 'All' || t.category === activeCategoryFilter).length === 0 && (
+                      <div className="text-center py-4 text-[9px] text-zinc-500">
+                        No saved templates in this category.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Create New template Form form */}
+                  <div className="pt-2 border-t border-neutral-200 dark:border-zinc-800 space-y-1.5 text-[10px]">
+                    <span className="font-bold text-neutral-500 dark:text-zinc-450 uppercase tracking-widest text-[8px] block">Save Current Snippet</span>
+                    
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="Template Title..."
+                        value={newTemplateTitle}
+                        onChange={(e) => setNewTemplateTitle(e.target.value)}
+                        className="w-full text-xs p-1 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none focus:border-primary text-neutral-800 dark:text-neutral-100"
+                      />
+                      <select
+                        value={newTemplateCategory}
+                        onChange={(e) => setNewTemplateCategory(e.target.value)}
+                        className="w-full text-xs p-1 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none text-neutral-700 dark:text-neutral-300 font-mono"
+                      >
+                        <option value="Layouts">Layouts</option>
+                        <option value="Behaviors">Behaviors</option>
+                        <option value="Visual FX">Visual FX</option>
+                        <option value="APIs & DB">APIs & DB</option>
+                      </select>
+                    </div>
+
+                    <div className="relative">
+                      <textarea
+                        placeholder="Visual/behavior details of this prompt snippet..."
+                        value={newTemplatePrompt}
+                        onChange={(e) => setNewTemplatePrompt(e.target.value)}
+                        rows={2}
+                        className="w-full text-xs p-1.5 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded outline-none focus:border-primary text-neutral-800 dark:text-neutral-100 resize-none font-mono"
+                      />
+                    </div>
+
+                    <button
+                      onClick={handleSaveTemplate}
+                      disabled={!newTemplateTitle.trim() || !newTemplatePrompt.trim()}
+                      className="w-full py-1 text-[9px] uppercase tracking-wider font-bold bg-[#ed3915] text-white hover:bg-primary-dark disabled:opacity-40 rounded flex items-center justify-center gap-1 cursor-pointer select-none"
+                    >
+                      <Plus className="w-2.5 h-2.5" />
+                      <span>Bookmark Template Spec</span>
+                    </button>
+                  </div>
+
+                </div>
+              )}
+            </div>
+
             {/* Custom System Prompt overriding rules */}
             <div className="pt-4 mt-auto border-t border-neutral-200 dark:border-zinc-800 space-y-2">
               <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 dark:text-zinc-500 flex items-center gap-1">
@@ -1175,9 +1548,38 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
               
               {/* Header bar of IDE Canvas */}
               <div className="h-10 shrink-0 bg-neutral-50 dark:bg-zinc-950 border-b border-neutral-200 dark:border-zinc-800 px-3 flex items-center justify-between select-none">
-                <span className="text-[10px] text-[#ed3915] font-mono tracking-wider uppercase font-black flex items-center gap-1.5">
-                  <Code2 className="w-3.5 h-3.5" /> TypeScript / HTML IDE Canvas
-                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-[#ed3915] font-mono tracking-wider uppercase font-black flex items-center gap-1.5 animate-pulse">
+                    <Code2 className="w-3.5 h-3.5" /> 
+                    {editorTheme === 'terminal' ? '⚡ MATRIX HACKER CONSOLE ENGINE' : 'TypeScript / HTML IDE Canvas'}
+                  </span>
+                  
+                  {/* Theme Switcher Toggle */}
+                  <div className="hidden sm:flex items-center gap-1 bg-neutral-200 dark:bg-zinc-900 px-1.5 py-0.5 rounded-md border border-neutral-300 dark:border-zinc-800">
+                    <button
+                      onClick={() => setEditorTheme('default')}
+                      className={`px-2 py-0.5 rounded text-[8px] font-black uppercase transition-all cursor-pointer ${
+                        editorTheme === 'default'
+                          ? 'bg-neutral-100 dark:bg-zinc-800 text-neutral-800 dark:text-neutral-100 shadow-3xs'
+                          : 'text-neutral-500 hover:text-neutral-700'
+                      }`}
+                    >
+                      Default
+                    </button>
+                    <button
+                      onClick={() => setEditorTheme('terminal')}
+                      className={`px-2 py-0.5 rounded text-[8px] font-black uppercase transition-all cursor-pointer flex items-center gap-1 ${
+                        editorTheme === 'terminal'
+                          ? 'bg-black text-[#39FF14] shadow-3xs border border-[#39FF14]/20'
+                          : 'text-neutral-500 hover:text-[#39FF14]'
+                      }`}
+                      title="Activate specialized Terminal neon syntax highlighting"
+                    >
+                      <span className="w-1 h-1 rounded-full bg-[#39FF14] inline-block animate-ping"></span>
+                      Terminal
+                    </button>
+                  </div>
+                </div>
                 
                 <div className="flex items-center gap-1.5">
                   <button
@@ -1208,23 +1610,53 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
                 </div>
               </div>
               
-              <div className="h-full w-full flex overflow-hidden">
+              <div className={`h-full w-full flex overflow-hidden ${editorTheme === 'terminal' ? 'bg-black text-zinc-100' : ''}`}>
                 {/* Line number padding */}
-                <div className="w-12 shrink-0 bg-neutral-50 dark:bg-zinc-950 font-mono text-[10px] text-neutral-400 dark:text-neutral-600 text-right p-2 select-none border-r border-neutral-200 dark:border-zinc-800">
+                <div className={`w-12 shrink-0 font-mono text-[10px] text-right p-2 select-none border-r ${
+                  editorTheme === 'terminal'
+                    ? 'bg-black border-[#39FF14]/30 text-[#39FF14]/50'
+                    : 'bg-neutral-50 dark:bg-zinc-950 text-neutral-400 dark:text-neutral-600 border-neutral-200 dark:border-zinc-800'
+                }`}>
                   {Array.from({ length: Math.min(codeContent.split('\n').length || 1, 100) }).map((_, idx) => (
                     <div key={idx} className="h-5 leading-5">{idx + 1}</div>
                   ))}
                 </div>
 
-                {/* Main Raw Code Editor Textarea */}
-                <textarea
-                  id="code-editor-textarea"
-                  value={codeContent}
-                  onChange={handleEditorChange}
-                  spellCheck={false}
-                  className="flex-1 h-full bg-zinc-900 text-zinc-100 font-mono text-xs p-4 focus:outline-none overflow-auto leading-5 whitespace-pre resize-none"
-                  placeholder="<!-- Synthesised Code will load here -->"
-                />
+                {editorTheme === 'terminal' ? (
+                  <div className="flex-1 h-full relative overflow-hidden bg-black select-text">
+                    {/* Syntax Highlight overlay below */}
+                    <pre
+                      ref={highlightRef}
+                      className="absolute inset-0 p-4 font-mono text-xs leading-5 whitespace-pre overflow-hidden z-0 pointer-events-none select-none tracking-normal"
+                      style={{ fontSize: '12px', lineHeight: '20px' }}
+                      dangerouslySetInnerHTML={{ __html: getHighlightedHTML(codeContent) }}
+                    />
+                    {/* Transparent inputs textarea above */}
+                    <textarea
+                      ref={textareaRef}
+                      id="code-editor-textarea"
+                      value={codeContent}
+                      onChange={handleEditorChange}
+                      onScroll={handleScroll}
+                      spellCheck={false}
+                      className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#39FF14] font-mono text-xs p-4 focus:outline-none overflow-auto leading-5 whitespace-pre resize-none z-10 selection:bg-[#39FF14]/20 tracking-normal"
+                      style={{ fontSize: '12px', lineHeight: '20px' }}
+                      placeholder="<!-- Synthesised Code will load here -->"
+                    />
+                    
+                    {/* Retro matrix phosphor-tube styling scanline */}
+                    <div className="absolute inset-0 pointer-events-none z-20 opacity-[0.04] bg-linear-to-b from-transparent via-white/50 to-transparent bg-[length:100%_4px] bg-repeat" />
+                  </div>
+                ) : (
+                  <textarea
+                    id="code-editor-textarea"
+                    value={codeContent}
+                    onChange={handleEditorChange}
+                    spellCheck={false}
+                    className="flex-1 h-full bg-zinc-900 text-zinc-100 font-mono text-xs p-4 focus:outline-none overflow-auto leading-5 whitespace-pre resize-none"
+                    placeholder="<!-- Synthesised Code will load here -->"
+                  />
+                )}
               </div>
             </div>
 
@@ -1389,7 +1821,7 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
           <div className="w-full md:w-[260px] lg:w-[290px] bg-neutral-50 dark:bg-zinc-900 border-t md:border-t-0 md:border-l border-neutral-200 dark:border-zinc-800 flex flex-col shrink-0">
             
             {/* Tabs selector */}
-            <div className="grid grid-cols-3 text-center border-b border-neutral-200 dark:border-zinc-800 bg-neutral-100 dark:bg-zinc-950 h-10 shrink-0 text-[10px] uppercase font-bold tracking-wider">
+            <div className="grid grid-cols-4 text-center border-b border-neutral-200 dark:border-zinc-800 bg-neutral-100 dark:bg-zinc-950 h-10 shrink-0 text-[10px] uppercase font-bold tracking-wider">
               <button
                 onClick={() => setActiveRightPanel('features')}
                 className={`py-2 px-1 hover:text-primary transition-all cursor-pointer ${activeRightPanel === 'features' ? 'bg-white dark:bg-zinc-900 text-primary border-b-2 border-primary' : 'text-neutral-400'}`}
@@ -1407,6 +1839,12 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
                 className={`py-2 px-1 hover:text-primary transition-all cursor-pointer ${activeRightPanel === 'database' ? 'bg-white dark:bg-zinc-900 text-primary border-b-2 border-primary' : 'text-neutral-400'}`}
               >
                 Database
+              </button>
+              <button
+                onClick={() => setActiveRightPanel('assets')}
+                className={`py-2 px-1 hover:text-primary transition-all cursor-pointer ${activeRightPanel === 'assets' ? 'bg-white dark:bg-zinc-900 text-primary border-b-2 border-primary' : 'text-neutral-400'}`}
+              >
+                AI Assets
               </button>
             </div>
 
@@ -1691,6 +2129,149 @@ export const BuildStudioWorkspace: React.FC<BuildStudioWorkspaceProps> = ({
                       </button>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* TAB 4: AI ASSETS GENERATOR */}
+              {activeRightPanel === 'assets' && (
+                <div className="space-y-4">
+                  <div className="p-3 bg-neutral-100 dark:bg-neutral-950 rounded-lg border border-neutral-250 dark:border-zinc-800 space-y-1.5">
+                    <span className="text-[10px] text-neutral-400 dark:text-zinc-500 uppercase block font-semibold">Asset Generator</span>
+                    <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-200">Creative Media Sandbox</h4>
+                    <p className="text-[10px] text-neutral-500 leading-normal">
+                      Develop fully custom, gorgeous AI placeholder images or launch icons for your compiled iFrame context.
+                    </p>
+                  </div>
+
+                  {/* Settings Input Grid */}
+                  <div className="space-y-3 pt-1">
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold tracking-wider text-neutral-500">Asset Persona</label>
+                      <select 
+                        value={imageType}
+                        onChange={(e: any) => {
+                          const val = e.target.value;
+                          setImageType(val);
+                          // Auto set matching aspect ratio!
+                          if (val === 'icon') setImageRatio('1:1');
+                          else if (val === 'hero') setImageRatio('16:9');
+                        }}
+                        className="w-full text-xs p-1.5 bg-white dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded focus:border-[#ed3915] text-neutral-800 dark:text-neutral-100 outline-none"
+                      >
+                        <option value="hero">App Hero Thumbnail (16:9)</option>
+                        <option value="icon">App Profile Launcher (1:1)</option>
+                        <option value="other">General Isometric Accent</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold tracking-wider text-neutral-500">Dimensions (Ratio)</label>
+                      <select 
+                        value={imageRatio}
+                        onChange={(e: any) => setImageRatio(e.target.value as any)}
+                        className="w-full text-xs p-1.5 bg-white dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded focus:border-[#ed3915] text-neutral-800 dark:text-neutral-100 outline-none"
+                      >
+                        <option value="1:1">Standard Square (1:1)</option>
+                        <option value="16:9">Wide View Landscape (16:9)</option>
+                        <option value="4:3">Card Snapshot (4:3)</option>
+                        <option value="3:4">Story Layout (3:4)</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold tracking-wider text-neutral-500">Visual Prompt</label>
+                      <textarea
+                        value={imagePrompt}
+                        onChange={(e) => setImagePrompt(e.target.value)}
+                        placeholder="e.g. Minimalist sleek robot, modern slate palette with transparent orange lines, aesthetic vector, golden hour, wide view"
+                        rows={3}
+                        className="w-full text-xs p-2 bg-white dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg focus:border-[#ed3915] text-neutral-800 dark:text-neutral-100 outline-none placeholder-zinc-500 font-sans resize-none"
+                      />
+                    </div>
+
+                    <button
+                      onClick={handleGenerateAssetImage}
+                      disabled={isGeneratingImage || !imagePrompt.trim()}
+                      className="w-full py-2 bg-[#ed3915] hover:bg-primary-dark disabled:opacity-40 disabled:hover:bg-primary text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 select-none shadow-sm"
+                    >
+                      <LucideImage className="w-3.5 h-3.5" />
+                      <span>{isGeneratingImage ? 'Generating Space...' : 'Forge Visual Asset'}</span>
+                    </button>
+                  </div>
+
+                  {/* Generated Assets Library List */}
+                  <div className="pt-2 border-t border-neutral-200 dark:border-zinc-800 space-y-2">
+                    <span className="text-[10px] text-neutral-400 dark:text-zinc-500 font-bold uppercase tracking-wider block">Generated Library ({generatedImages.length})</span>
+                    
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                      {generatedImages.map((img, idx) => (
+                        <div key={idx} className="p-2 bg-neutral-100 dark:bg-zinc-950 rounded-lg border border-neutral-200 dark:border-zinc-800 relative group overflow-hidden">
+                          {/* Image preview */}
+                          <div className="relative rounded overflow-hidden bg-zinc-900 border border-zinc-850">
+                            <img 
+                              src={img.url} 
+                              alt="Generated Preview Asset" 
+                              referrerPolicy="no-referrer"
+                              className="w-full h-auto object-cover max-h-[140px] hover:scale-105 transition-transform duration-300"
+                            />
+                            {img.isFallback && (
+                              <div className="absolute top-1 right-1 px-1 bg-yellow-500/90 text-[8px] font-bold text-white rounded">
+                                Seeded
+                              </div>
+                            )}
+                          </div>
+
+                          <p className="text-[9px] text-zinc-400 font-sans line-clamp-2 mt-1.5 leading-normal" title={img.prompt}>
+                            {img.prompt}
+                          </p>
+
+                          {/* Controls Row */}
+                          <div className="flex items-center justify-between gap-1 mt-2 pt-1 border-t border-zinc-200 dark:border-zinc-900">
+                            <span className="text-[8px] text-neutral-400 font-mono select-none">{img.ratio} @ {img.date}</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => {
+                                  // Copy HTML img tag
+                                  const snippet = `<img src="${img.url}" alt="${img.prompt.replace(/"/g, '&quot;')}" referrerPolicy="no-referrer" className="rounded-xl shadow-lg border border-neutral-200 dark:border-neutral-800 w-full" />`;
+                                  navigator.clipboard.writeText(snippet);
+                                  setCopiedIndex(idx);
+                                  setTimeout(() => setCopiedIndex(null), 1500);
+                                }}
+                                className="p-1 bg-neutral-200 hover:bg-neutral-300 dark:bg-zinc-900 dark:hover:bg-zinc-850 border border-neutral-300 dark:border-zinc-800 text-neutral-600 dark:text-neutral-400 hover:text-primary rounded text-[9px] transition-all cursor-pointer font-bold flex items-center gap-1 select-none"
+                                title="Copy absolute HTML Image component boilerplate snippet"
+                              >
+                                {copiedIndex === idx ? (
+                                  <span className="text-green-500 text-[8px] uppercase">Tag Copied!</span>
+                                ) : (
+                                  <>
+                                    <Copy className="w-2.5 h-2.5" />
+                                    <span>Copy Tag</span>
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  // Copy raw URL
+                                  navigator.clipboard.writeText(img.url);
+                                  alert('Image URL copied successfully!');
+                                }}
+                                className="p-1 bg-neutral-200 hover:bg-neutral-300 dark:bg-zinc-900 dark:hover:bg-zinc-850 border border-neutral-300 dark:border-zinc-800 text-neutral-600 dark:text-neutral-400 hover:text-primary rounded text-[8px] transition-all cursor-pointer font-bold select-none"
+                                title="Copy raw asset source link"
+                              >
+                                Link
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      {generatedImages.length === 0 && (
+                        <div className="text-center py-6 text-[10px] text-zinc-500 leading-normal">
+                          No local assets generated yet.<br />Enter a visual prompt above and tap Forge to start!
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
 

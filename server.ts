@@ -113,6 +113,104 @@ CRITICAL REQUIREMENTS:
   }
 });
 
+// Applet-Specific Image Generation API using gemini-2.5-flash-image
+app.post("/api/generate-image", async (req, res) => {
+  try {
+    const { prompt, aspectRatio } = req.body;
+    if (!prompt) {
+      res.status(400).json({ error: "Prompt is required." });
+      return;
+    }
+
+    const currentRatio = aspectRatio || "1:1";
+    console.log(`Generating image for prompt: "${prompt}", aspectRatio: ${currentRatio}`);
+
+    // Check if key is available. If not, generate high-quality fallback immediately to avoid blocking client
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      // Create lovely abstract placeholder seed based on prompt text length and current timestamp
+      const width = currentRatio === "16:9" ? 1200 : currentRatio === "4:3" ? 800 : currentRatio === "3:4" ? 600 : 512;
+      const height = currentRatio === "16:9" ? 675 : currentRatio === "4:3" ? 600 : currentRatio === "3:4" ? 800 : 512;
+      const cleanSeed = encodeURIComponent(prompt.trim().slice(0, 15).replace(/[^a-zA-Z0-9]/g, ''));
+      const fallbackUrl = `https://picsum.photos/seed/${cleanSeed || 'aesthetic'}/${width}/${height}`;
+      
+      res.json({
+        status: "success",
+        imageUrl: fallbackUrl,
+        isFallback: true,
+        message: "Simulated beautiful placeholder image due to unconfigured API key."
+      });
+      return;
+    }
+
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          {
+            text: `${prompt}. High-quality visual asset, beautiful composition, rich contrast, production-ready.`,
+          },
+        ],
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: currentRatio,
+          imageSize: "1K"
+        },
+      },
+    });
+
+    let imageUrl = null;
+    if (response.candidates?.[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          const base64EncodeString = part.inlineData.data;
+          imageUrl = `data:image/png;base64,${base64EncodeString}`;
+          break;
+        }
+      }
+    }
+
+    if (imageUrl) {
+      res.json({
+        status: "success",
+        imageUrl,
+        isFallback: false
+      });
+    } else {
+      // If response did not contain inlineData part, fallback cleanly
+      const width = currentRatio === "16:9" ? 1200 : currentRatio === "4:3" ? 800 : currentRatio === "3:4" ? 600 : 512;
+      const height = currentRatio === "16:9" ? 675 : currentRatio === "4:3" ? 600 : currentRatio === "3:4" ? 800 : 512;
+      const cleanSeed = encodeURIComponent(prompt.trim().slice(0, 15).replace(/[^a-zA-Z0-9]/g, ''));
+      const fallbackUrl = `https://picsum.photos/seed/${cleanSeed || 'aesthetic'}/${width}/${height}`;
+      res.json({
+        status: "success",
+        imageUrl: fallbackUrl,
+        isFallback: true,
+        message: "Fallback triggered: Gemini response contents did not contain direct inline image data."
+      });
+    }
+  } catch (err: any) {
+    console.error("Gemini Image Generation Error:", err);
+    // Graceful execution fallback instead of hard-rejecting
+    const { prompt, aspectRatio } = req.body;
+    const currentRatio = aspectRatio || "1:1";
+    const width = currentRatio === "16:9" ? 1200 : currentRatio === "4:3" ? 850 : currentRatio === "3:4" ? 650 : 512;
+    const height = currentRatio === "16:9" ? 675 : currentRatio === "4:3" ? 600 : currentRatio === "3:4" ? 850 : 512;
+    const cleanSeed = encodeURIComponent((prompt || 'aesthetic').trim().slice(0, 15).replace(/[^a-zA-Z0-9]/g, ''));
+    const fallbackUrl = `https://picsum.photos/seed/${cleanSeed}/${width}/${height}`;
+    
+    res.json({
+      status: "success",
+      imageUrl: fallbackUrl,
+      isFallback: true,
+      error_message: err.message || "Failed to query Gemini image model.",
+      fallback_source: "Picsum Dynamic Seed Engine"
+    });
+  }
+});
+
 // 3. GitHub OAuth Authorize url endpoint
 app.get("/api/github/auth-url", (req, res) => {
   const clientId = process.env.GITHUB_CLIENT_ID || "";

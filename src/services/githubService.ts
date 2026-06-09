@@ -26,7 +26,35 @@ export interface PushParams {
   branch?: string;
 }
 
+export interface GitHubStatus {
+  state: 'idle' | 'syncing' | 'synced' | 'error';
+  lastAction?: string;
+  lastError?: string;
+  lastSuccessAt?: string;
+}
+
 export const GitHubService = {
+  status: {
+    state: 'idle' as 'idle' | 'syncing' | 'synced' | 'error',
+    lastAction: undefined as string | undefined,
+    lastError: undefined as string | undefined,
+    lastSuccessAt: undefined as string | undefined,
+  },
+
+  listeners: [] as ((status: GitHubStatus) => void)[],
+
+  subscribe(callback: (status: GitHubStatus) => void): () => void {
+    this.listeners.push(callback);
+    callback({ ...this.status });
+    return () => {
+      this.listeners = this.listeners.filter(li => li !== callback);
+    };
+  },
+
+  updateStatus(updates: Partial<GitHubStatus>) {
+    this.status = { ...this.status, ...updates };
+    this.listeners.forEach(li => li({ ...this.status }));
+  },
   /**
    * Generates the GitHub OAuth Authorize url.
    * If client flow is used, we can configure this directly.
@@ -72,9 +100,27 @@ export const GitHubService = {
   pushFileToRepo: async (params: PushParams): Promise<{ html_url: string; sha: string }> => {
     const { token, owner, repo, filePath, content, commitMessage, branch = 'main' } = params;
     
-    if (!token) throw new Error("A valid GitHub authentication token is required.");
-    if (!owner || !repo) throw new Error("Repository owner and name are required.");
-    if (!filePath) throw new Error("Target file path is required.");
+    GitHubService.updateStatus({
+      state: 'syncing',
+      lastAction: `Pushing ${filePath} to ${owner}/${repo}`,
+      lastError: undefined
+    });
+    
+    if (!token) {
+      const err = new Error("A valid GitHub authentication token is required.");
+      GitHubService.updateStatus({ state: 'error', lastError: err.message });
+      throw err;
+    }
+    if (!owner || !repo) {
+      const err = new Error("Repository owner and name are required.");
+      GitHubService.updateStatus({ state: 'error', lastError: err.message });
+      throw err;
+    }
+    if (!filePath) {
+      const err = new Error("Target file path is required.");
+      GitHubService.updateStatus({ state: 'error', lastError: err.message });
+      throw err;
+    }
 
     const headers = {
       "Authorization": `token ${token}`,
@@ -82,50 +128,65 @@ export const GitHubService = {
       "Content-Type": "application/json",
     };
 
-    // 1. Check if file already exists to get its current SHA
-    let existingSha: string | undefined;
     try {
-      const checkUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
-      const checkRes = await fetch(checkUrl, { method: "GET", headers });
-      
-      if (checkRes.ok) {
-        const fileInfo = await checkRes.json();
-        existingSha = fileInfo.sha;
+      // 1. Check if file already exists to get its current SHA
+      let existingSha: string | undefined;
+      try {
+        const checkUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`;
+        const checkRes = await fetch(checkUrl, { method: "GET", headers });
+        
+        if (checkRes.ok) {
+          const fileInfo = await checkRes.json();
+          existingSha = fileInfo.sha;
+        }
+      } catch (err) {
+        console.warn("Could not check for existing file, proceeding as a new commit creation:", err);
       }
-    } catch (err) {
-      console.warn("Could not check for existing file, proceeding as a new commit creation:", err);
+
+      // 2. Base64 encode the content (handles UTF-8 strings correctly)
+      const base64Content = btoa(unescape(encodeURIComponent(content)));
+
+      // 3. Make the PUT commit request
+      const commitUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
+      const body: any = {
+        message: commitMessage || "Automated build commit via BuildStudio",
+        content: base64Content,
+        branch
+      };
+
+      if (existingSha) {
+        body.sha = existingSha;
+      }
+
+      const putResponse = await fetch(commitUrl, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body)
+      });
+
+      if (!putResponse.ok) {
+        const errorMsg = await putResponse.text();
+        throw new Error(`GitHub Commit failed: ${putResponse.status} - ${errorMsg}`);
+      }
+
+      const resData = await putResponse.json();
+
+      GitHubService.updateStatus({
+        state: 'synced',
+        lastSuccessAt: new Date().toLocaleTimeString(),
+        lastError: undefined
+      });
+
+      return {
+        html_url: resData.content.html_url,
+        sha: resData.content.sha
+      };
+    } catch (err: any) {
+      GitHubService.updateStatus({
+        state: 'error',
+        lastError: err.message || String(err)
+      });
+      throw err;
     }
-
-    // 2. Base64 encode the content (handles UTF-8 strings correctly)
-    const base64Content = btoa(unescape(encodeURIComponent(content)));
-
-    // 3. Make the PUT commit request
-    const commitUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`;
-    const body: any = {
-      message: commitMessage || "Automated build commit via BuildStudio",
-      content: base64Content,
-      branch
-    };
-
-    if (existingSha) {
-      body.sha = existingSha;
-    }
-
-    const putResponse = await fetch(commitUrl, {
-      method: "PUT",
-      headers,
-      body: JSON.stringify(body)
-    });
-
-    if (!putResponse.ok) {
-      const errorMsg = await putResponse.text();
-      throw new Error(`GitHub Commit failed: ${putResponse.status} - ${errorMsg}`);
-    }
-
-    const resData = await putResponse.json();
-    return {
-      html_url: resData.content.html_url,
-      sha: resData.content.sha
-    };
   }
 };
