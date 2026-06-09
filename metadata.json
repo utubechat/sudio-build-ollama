@@ -1,0 +1,6 @@
+{
+  "name": "BuildStudio",
+  "description": "A TikTok-style AI IDE with an immersive landing page, interactive live preview, simulated Ollama/Supabase integrations, and a Godmode admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
